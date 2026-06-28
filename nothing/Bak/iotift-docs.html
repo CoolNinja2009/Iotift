@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IOTIFT Language Documentation</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,600;1,400&family=Barlow:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0a0c0f;
+    --bg2:       #111318;
+    --bg3:       #181c23;
+    --border:    #1e2530;
+    --accent:    #00e5ff;
+    --accent2:   #ff6b35;
+    --accent3:   #a8ff3e;
+    --text:      #c8d0dc;
+    --text-dim:  #5a6478;
+    --text-head: #eef1f6;
+    --keyword:   #00e5ff;
+    --string:    #a8ff3e;
+    --comment:   #3d4f63;
+    --number:    #ff9f43;
+    --type:      #ff6b35;
+    --fn:        #c792ea;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Barlow', sans-serif;
+    font-weight: 300;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* ── NOISE TEXTURE ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 260px;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    z-index: 100;
+    padding: 0 0 40px;
+  }
+
+  .sidebar::-webkit-scrollbar { width: 4px; }
+  .sidebar::-webkit-scrollbar-track { background: transparent; }
+  .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .logo {
+    padding: 28px 24px 24px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+
+  .logo-name {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: -0.5px;
+  }
+
+  .logo-name span { color: var(--accent2); }
+
+  .logo-tag {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+
+  .nav-section {
+    padding: 8px 24px 4px;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .nav-link {
+    display: block;
+    padding: 6px 24px;
+    font-size: 13.5px;
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.15s, background 0.15s;
+    font-family: 'IBM Plex Mono', monospace;
+    border-left: 2px solid transparent;
+  }
+
+  .nav-link:hover {
+    color: var(--text-head);
+    background: var(--bg3);
+    border-left-color: var(--accent);
+  }
+
+  .nav-link.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+  }
+
+  /* ── MAIN CONTENT ── */
+  .main {
+    margin-left: 260px;
+    max-width: 860px;
+    padding: 60px 64px 120px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── HERO ── */
+  .hero {
+    padding-bottom: 64px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 64px;
+  }
+
+  .hero-eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 16px;
+  }
+
+  .hero h1 {
+    font-size: 56px;
+    font-weight: 900;
+    color: var(--text-head);
+    line-height: 1.05;
+    letter-spacing: -2px;
+    margin-bottom: 20px;
+  }
+
+  .hero h1 span { color: var(--accent); }
+
+  .hero-sub {
+    font-size: 18px;
+    color: var(--text);
+    max-width: 600px;
+    line-height: 1.6;
+    font-weight: 300;
+  }
+
+  .badge-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 28px;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+  }
+
+  .badge-cyan  { background: rgba(0,229,255,0.1);  color: var(--accent);  border: 1px solid rgba(0,229,255,0.25); }
+  .badge-orange{ background: rgba(255,107,53,0.1); color: var(--accent2); border: 1px solid rgba(255,107,53,0.25); }
+  .badge-green { background: rgba(168,255,62,0.1); color: var(--accent3); border: 1px solid rgba(168,255,62,0.25); }
+
+  /* ── SECTIONS ── */
+  .section {
+    margin-bottom: 72px;
+    scroll-margin-top: 32px;
+  }
+
+  .section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent2);
+    margin-bottom: 10px;
+  }
+
+  h2 {
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--text-head);
+    letter-spacing: -0.8px;
+    margin-bottom: 16px;
+  }
+
+  h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-head);
+    letter-spacing: -0.3px;
+    margin: 32px 0 10px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  h3 .kw { color: var(--keyword); }
+  h3 .ty { color: var(--type); }
+
+  p {
+    font-size: 15px;
+    color: var(--text);
+    margin-bottom: 14px;
+    line-height: 1.75;
+  }
+
+  /* ── CODE BLOCKS ── */
+  .code-block {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 16px 0 24px;
+    position: relative;
+  }
+
+  .code-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .code-lang {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .code-dots { display: flex; gap: 5px; }
+  .code-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot-r { background: #ff5f57; }
+  .dot-y { background: #ffbd2e; }
+  .dot-g { background: #28ca42; }
+
+  pre {
+    padding: 20px 22px;
+    overflow-x: auto;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13.5px;
+    line-height: 1.7;
+    tab-size: 4;
+  }
+
+  pre::-webkit-scrollbar { height: 4px; }
+  pre::-webkit-scrollbar-track { background: transparent; }
+  pre::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* syntax highlighting */
+  .kw  { color: var(--keyword); font-weight: 600; }
+  .str { color: var(--string); }
+  .cm  { color: var(--comment); font-style: italic; }
+  .nm  { color: var(--number); }
+  .ty  { color: var(--type); }
+  .fn  { color: var(--fn); }
+  .pin { color: var(--accent); }
+  .op  { color: var(--text-dim); }
+
+  /* ── INLINE CODE ── */
+  code {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 6px;
+    color: var(--accent);
+  }
+
+  /* ── TABLE ── */
+  .table-wrap { overflow-x: auto; margin: 16px 0 24px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+  }
+
+  th {
+    background: var(--bg3);
+    color: var(--text-dim);
+    font-weight: 400;
+    text-align: left;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-size: 11px;
+  }
+
+  td {
+    padding: 9px 14px;
+    border: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+
+  tr:nth-child(even) td { background: rgba(255,255,255,0.015); }
+
+  td:first-child { color: var(--accent); }
+
+  /* ── CALLOUT ── */
+  .callout {
+    border-left: 3px solid var(--accent2);
+    background: rgba(255,107,53,0.05);
+    border-radius: 0 6px 6px 0;
+    padding: 14px 18px;
+    margin: 16px 0 24px;
+    font-size: 14px;
+  }
+
+  .callout.info {
+    border-left-color: var(--accent);
+    background: rgba(0,229,255,0.05);
+  }
+
+  .callout.good {
+    border-left-color: var(--accent3);
+    background: rgba(168,255,62,0.05);
+  }
+
+  .callout strong { color: var(--text-head); font-weight: 600; }
+
+  /* ── DIVIDER ── */
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 48px 0;
+  }
+
+  /* ── QUICK REF GRID ── */
+  .qr-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 16px 0 24px;
+  }
+
+  .qr-card {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+  }
+
+  .qr-card-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+  }
+
+  .qr-card pre {
+    padding: 0;
+    font-size: 12.5px;
+    background: none;
+    border: none;
+  }
+
+  /* ── ANIMATE ON LOAD ── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .hero { animation: fadeUp 0.5s ease both; }
+  .section { animation: fadeUp 0.5s ease both; animation-delay: 0.05s; }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 900px) {
+    .sidebar { display: none; }
+    .main { margin-left: 0; padding: 32px 24px 80px; }
+    .hero h1 { font-size: 36px; }
+    .qr-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── SIDEBAR ── -->
+<nav class="sidebar">
+  <div class="logo">
+    <div class="logo-name">IOT<span>IFT</span></div>
+    <div class="logo-tag">Language Reference v0.1</div>
+  </div>
+
+  <div class="nav-section">Getting Started</div>
+  <a class="nav-link" href="#intro">What is IOTIFT?</a>
+  <a class="nav-link" href="#install">Installation</a>
+  <a class="nav-link" href="#hello">Hello World</a>
+  <a class="nav-link" href="#compiler">Using the Compiler</a>
+
+  <div class="nav-section">Language</div>
+  <a class="nav-link" href="#device">Device Target</a>
+  <a class="nav-link" href="#pins">Pins</a>
+  <a class="nav-link" href="#variables">Variables</a>
+  <a class="nav-link" href="#assignment">Assignment</a>
+  <a class="nav-link" href="#after">After (non-blocking)</a>
+  <a class="nav-link" href="#operators">Operators</a>
+  <a class="nav-link" href="#conditionals">Conditionals</a>
+  <a class="nav-link" href="#loops">Loops</a>
+  <a class="nav-link" href="#events">Events</a>
+  <a class="nav-link" href="#every">Every (timers)</a>
+  <a class="nav-link" href="#functions">Functions</a>
+  <a class="nav-link" href="#extern">Extern</a>
+  <a class="nav-link" href="#structs">Structs</a>
+  <a class="nav-link" href="#arrays">Arrays</a>
+  <a class="nav-link" href="#import">Import</a>
+  <a class="nav-link" href="#print">Print</a>
+
+  <div class="nav-section">Examples</div>
+  <a class="nav-link" href="#ex-blink">LED Blink</a>
+  <a class="nav-link" href="#ex-button">Button + LED</a>
+  <a class="nav-link" href="#ex-full">Full Program</a>
+
+  <div class="nav-section">Reference</div>
+  <a class="nav-link" href="#quickref">Quick Reference</a>
+  <a class="nav-link" href="#devices">Supported Devices</a>
+</nav>
+
+<!-- ── MAIN ── -->
+<main class="main">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="hero-eyebrow">// documentation</div>
+    <h1>IOT<span>IFT</span></h1>
+    <p class="hero-sub">A minimal, expressive programming language for IoT and Arduino devices. Write hardware logic in plain English. Compile to C.</p>
+    <div class="badge-row">
+      <span class="badge badge-cyan">Turing Complete</span>
+      <span class="badge badge-orange">Non-Blocking by Default</span>
+      <span class="badge badge-green">Compiles to C</span>
+    </div>
+  </div>
+
+  <!-- WHAT IS IOTIFT -->
+  <section class="section" id="intro">
+    <div class="section-label">01 — Introduction</div>
+    <h2>What is IOTIFT?</h2>
+    <p>IOTIFT is a domain-specific language built for microcontrollers. Instead of fighting with C timers, interrupt flags, and state machines, you write what you mean — and the compiler handles the rest.</p>
+    <p>A statement like <code>LED = 0 after 200;</code> looks simple. Under the hood the compiler generates a non-blocking scheduled timer, a state flag, and a handler function — automatically. You never write <code>delay()</code>.</p>
+
+    <div class="callout good">
+      <strong>Design philosophy:</strong> Every ugly C pattern that every IoT developer rewrites from scratch should be one clean line in IOTIFT.
+    </div>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="cm">// This is all you need for a button-controlled blinking LED</span>
+<span class="kw">pin</span> <span class="pin">LED</span> <span class="op">=</span> <span class="kw">output</span> <span class="nm">12</span>;
+<span class="kw">pin</span> <span class="pin">BTN</span> <span class="op">=</span> <span class="kw">input</span>  <span class="nm">5</span>;
+
+<span class="kw">on</span> <span class="pin">BTN</span>.press {
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">1</span>;
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span> <span class="kw">after</span> <span class="nm">200</span>;
+}</pre>
+    </div>
+  </section>
+
+  <!-- INSTALL -->
+  <section class="section" id="install">
+    <div class="section-label">02 — Setup</div>
+    <h2>Installation</h2>
+    <p>IOTIFT requires Python 3.10 or higher. No external dependencies.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">shell</div>
+      </div>
+      <pre><span class="cm"># clone or download the compiler files</span>
+git clone https://github.com/yourname/iotift
+
+<span class="cm"># the compiler is a single command</span>
+python iotift.py your_program.iot -o output.c</pre>
+    </div>
+
+    <p>The compiler produces a single <code>.c</code> file you can drop into Arduino IDE, PlatformIO, or compile with <code>gcc</code> for PC simulation.</p>
+  </section>
+
+  <!-- HELLO WORLD -->
+  <section class="section" id="hello">
+    <div class="section-label">03 — First Program</div>
+    <h2>Hello World</h2>
+    <p>The IOTIFT equivalent of hello world is a blinking LED.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">blink.iot</div>
+      </div>
+      <pre><span class="kw">@device</span> arduino_uno
+
+<span class="kw">pin</span> <span class="pin">LED</span> <span class="op">=</span> <span class="kw">output</span> <span class="nm">13</span>;
+
+<span class="kw">every</span> <span class="nm">1000</span> {
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">1</span>;
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span> <span class="kw">after</span> <span class="nm">500</span>;
+}</pre>
+    </div>
+
+    <p>Compile and flash it:</p>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">shell</div>
+      </div>
+      <pre>python iotift.py blink.iot -o blink.c --device arduino_uno</pre>
+    </div>
+  </section>
+
+  <!-- COMPILER -->
+  <section class="section" id="compiler">
+    <div class="section-label">04 — Compiler</div>
+    <h2>Using the Compiler</h2>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">shell</div>
+      </div>
+      <pre>python iotift.py &lt;source.iot&gt; [options]
+
+<span class="cm">OPTIONS:</span>
+  -o, --output &lt;file&gt;    output .c file  (default: generated.c)
+  --device &lt;name&gt;        target device   (default: arduino_uno)
+  --ast                  dump AST to stdout for debugging</pre>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Flag</th><th>Example</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td>-o</td><td><code>-o main.c</code></td><td>Set output file name</td></tr>
+          <tr><td>--device</td><td><code>--device esp32</code></td><td>Set hardware target for HAL selection</td></tr>
+          <tr><td>--ast</td><td><code>--ast</code></td><td>Print the parsed AST (useful for debugging)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- DEVICE -->
+  <section class="section" id="device">
+    <div class="section-label">Language</div>
+    <h2>Device Target</h2>
+    <p>Declare your target hardware at the top of the file. This tells the compiler which HAL functions and timing primitives to use.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="kw">@device</span> esp32
+<span class="kw">@device</span> arduino_uno
+<span class="kw">@device</span> arduino_nano
+<span class="kw">@device</span> rpi_pico</pre>
+    </div>
+
+    <div class="callout info">
+      <strong>Note:</strong> The <code>@device</code> declaration is optional. If omitted, the compiler defaults to <code>arduino_uno</code> compatible output.
+    </div>
+  </section>
+
+  <!-- PINS -->
+  <section class="section" id="pins">
+    <h2>Pins</h2>
+    <p>Pins are the primary way to interact with hardware. Declare them at the top of your file.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="kw">pin</span> <span class="pin">LED</span>  <span class="op">=</span> <span class="kw">output</span>  <span class="nm">12</span>;   <span class="cm">// digital output</span>
+<span class="kw">pin</span> <span class="pin">BTN</span>  <span class="op">=</span> <span class="kw">input</span>   <span class="nm">5</span>;    <span class="cm">// digital input</span>
+<span class="kw">pin</span> <span class="pin">TEMP</span> <span class="op">=</span> <span class="kw">analog</span>  <span class="nm">34</span>;   <span class="cm">// analog input (ADC)</span>
+<span class="kw">pin</span> <span class="pin">SDA</span>  <span class="op">=</span> <span class="kw">i2c</span>     <span class="nm">21</span>;   <span class="cm">// I2C data</span>
+<span class="kw">pin</span> <span class="pin">SCL</span>  <span class="op">=</span> <span class="kw">i2c</span>     <span class="nm">22</span>;   <span class="cm">// I2C clock</span>
+<span class="kw">pin</span> <span class="pin">FAN</span>  <span class="op">=</span> <span class="kw">pwm</span>     <span class="nm">18</span>;   <span class="cm">// PWM output</span></pre>
+    </div>
+
+    <p>Syntax: <code>pin NAME = direction NUMBER;</code></p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Direction</th><th>Use</th><th>Compiles to</th></tr></thead>
+        <tbody>
+          <tr><td>output</td><td>LEDs, relays, motors</td><td><code>pinMode(PIN, OUTPUT)</code></td></tr>
+          <tr><td>input</td><td>Buttons, switches</td><td><code>pinMode(PIN, INPUT)</code></td></tr>
+          <tr><td>analog</td><td>Sensors, potentiometers</td><td><code>pinMode(PIN, INPUT)</code></td></tr>
+          <tr><td>i2c</td><td>I2C devices</td><td>HAL I2C init</td></tr>
+          <tr><td>spi</td><td>SPI devices</td><td>HAL SPI init</td></tr>
+          <tr><td>pwm</td><td>Servos, dimmers</td><td><code>pinMode(PIN, OUTPUT)</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Once declared, pin names work as first-class identifiers — use them directly in assignments and events.</p>
+  </section>
+
+  <!-- VARIABLES -->
+  <section class="section" id="variables">
+    <h2>Variables</h2>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="kw">int</span>   count   <span class="op">=</span> <span class="nm">0</span>;
+<span class="kw">float</span> temp    <span class="op">=</span> <span class="nm">0.0</span>;
+<span class="kw">bool</span>  active  <span class="op">=</span> <span class="kw">false</span>;
+<span class="kw">str</span>   name    <span class="op">=</span> <span class="str">"sensor1"</span>;
+
+<span class="kw">const</span> <span class="kw">int</span>   MAX   <span class="op">=</span> <span class="nm">100</span>;
+<span class="kw">const</span> <span class="kw">float</span> RATIO <span class="op">=</span> <span class="nm">3.14</span>;</pre>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Type</th><th>C equivalent</th><th>Example value</th></tr></thead>
+        <tbody>
+          <tr><td>int</td><td><code>int</code></td><td><code>0</code>, <code>-5</code>, <code>100</code></td></tr>
+          <tr><td>float</td><td><code>float</code></td><td><code>0.0</code>, <code>3.14</code>, <code>-1.5</code></td></tr>
+          <tr><td>bool</td><td><code>int</code> (0/1)</td><td><code>true</code>, <code>false</code></td></tr>
+          <tr><td>str</td><td><code>char*</code></td><td><code>"hello"</code></td></tr>
+          <tr><td>const int</td><td><code>const int</code></td><td>immutable integer</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ASSIGNMENT -->
+  <section class="section" id="assignment">
+    <h2>Assignment</h2>
+    <p>Assign values to variables or pins. Assigning to a pin name automatically calls the correct HAL function.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="cm">// variable</span>
+count <span class="op">=</span> <span class="nm">10</span>;
+count <span class="op">=</span> count <span class="op">+</span> <span class="nm">1</span>;
+
+<span class="cm">// pin — calls gpio_set_level() automatically</span>
+<span class="pin">LED</span> <span class="op">=</span> <span class="nm">1</span>;    <span class="cm">// HIGH</span>
+<span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span>;    <span class="cm">// LOW</span>
+
+<span class="cm">// compound</span>
+count <span class="op">+=</span> <span class="nm">1</span>;
+count <span class="op">-=</span> <span class="nm">1</span>;
+count <span class="op">*=</span> <span class="nm">2</span>;
+count <span class="op">/=</span> <span class="nm">4</span>;</pre>
+    </div>
+  </section>
+
+  <!-- AFTER -->
+  <section class="section" id="after">
+    <h2>After — Non-Blocking Delay</h2>
+    <p>The <code>after</code> keyword is one of IOTIFT's most important features. It schedules a pin or variable assignment to happen after a delay, <strong>without blocking the main loop.</strong></p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span> <span class="kw">after</span> <span class="nm">200</span>;     <span class="cm">// turn off after 200 ms</span>
+<span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span> <span class="kw">after</span> <span class="nm">2000</span>;    <span class="cm">// turn off after 2000 ms (2 seconds)</span></pre>
+    </div>
+
+    <div class="callout">
+      <strong>All delays are in milliseconds.</strong> There is no other unit. This keeps programs unambiguous and prevents bugs.
+    </div>
+
+    <p>The difference versus a blocking delay:</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">comparison</div>
+      </div>
+      <pre><span class="cm">// ❌ BAD — blocks everything for 200ms</span>
+<span class="pin">LED</span> <span class="op">=</span> <span class="nm">1</span>;
+delay(<span class="nm">200</span>);
+<span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span>;
+
+<span class="cm">// ✅ GOOD — returns immediately, schedules the OFF</span>
+<span class="pin">LED</span> <span class="op">=</span> <span class="nm">1</span>;
+<span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span> <span class="kw">after</span> <span class="nm">200</span>;</pre>
+    </div>
+  </section>
+
+  <!-- OPERATORS -->
+  <section class="section" id="operators">
+    <h2>Operators</h2>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Operator</th><th>Meaning</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr><td>+  -  *  /  %</td><td>Arithmetic</td><td><code>count + 1</code></td></tr>
+          <tr><td>==  !=</td><td>Equality</td><td><code>count == 10</code></td></tr>
+          <tr><td>&lt;  &gt;  &lt;=  &gt;=</td><td>Comparison</td><td><code>temp &gt; 50.0</code></td></tr>
+          <tr><td>&amp;&amp;  ||</td><td>Logical AND / OR</td><td><code>a &amp;&amp; b</code></td></tr>
+          <tr><td>!</td><td>Logical NOT</td><td><code>!active</code></td></tr>
+          <tr><td>+=  -=  *=  /=</td><td>Compound assign</td><td><code>count += 1</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- CONDITIONALS -->
+  <section class="section" id="conditionals">
+    <h2>Conditionals</h2>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="cm">// basic if</span>
+<span class="kw">if</span> (count <span class="op">==</span> <span class="nm">10</span>) {
+    esp_restart();
+}
+
+<span class="cm">// if / else</span>
+<span class="kw">if</span> (temp <span class="op">&gt;</span> <span class="nm">50.0</span>) {
+    <span class="pin">FAN</span> <span class="op">=</span> <span class="nm">1</span>;
+} <span class="kw">else</span> {
+    <span class="pin">FAN</span> <span class="op">=</span> <span class="nm">0</span>;
+}
+
+<span class="cm">// if / else if / else</span>
+<span class="kw">if</span> (temp <span class="op">&gt;</span> <span class="nm">70.0</span>) {
+    <span class="pin">FAN</span> <span class="op">=</span> <span class="nm">1</span>;
+    print(<span class="str">"HOT"</span>);
+} <span class="kw">else if</span> (temp <span class="op">&gt;</span> <span class="nm">40.0</span>) {
+    <span class="pin">FAN</span> <span class="op">=</span> <span class="nm">1</span>;
+} <span class="kw">else</span> {
+    <span class="pin">FAN</span> <span class="op">=</span> <span class="nm">0</span>;
+}</pre>
+    </div>
+  </section>
+
+  <!-- LOOPS -->
+  <section class="section" id="loops">
+    <h2>Loops</h2>
+
+    <h3><span class="kw">loop</span> — infinite</h3>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="kw">loop</span> {
+    count <span class="op">+=</span> <span class="nm">1</span>;
+}</pre>
+    </div>
+
+    <h3><span class="kw">while</span></h3>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="kw">while</span> (count <span class="op">&lt;</span> <span class="nm">10</span>) {
+    count <span class="op">+=</span> <span class="nm">1</span>;
+}</pre>
+    </div>
+
+    <h3><span class="kw">for</span></h3>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="kw">for</span> (<span class="kw">int</span> i <span class="op">=</span> <span class="nm">0</span>; i <span class="op">&lt;</span> <span class="nm">5</span>; i <span class="op">+=</span> <span class="nm">1</span>) {
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">1</span>;
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span> <span class="kw">after</span> <span class="nm">100</span>;
+}</pre>
+    </div>
+
+    <p>Use <code>break</code> to exit any loop, and <code>continue</code> to skip to the next iteration.</p>
+  </section>
+
+  <!-- EVENTS -->
+  <section class="section" id="events">
+    <h2>Events</h2>
+    <p>Event blocks run automatically when a pin changes state. The compiler generates all the edge-detection boilerplate for you.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="cm">// fires once when BTN goes LOW→HIGH</span>
+<span class="kw">on</span> <span class="pin">BTN</span>.press {
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">1</span>;
+}
+
+<span class="cm">// fires once when BTN goes HIGH→LOW</span>
+<span class="kw">on</span> <span class="pin">BTN</span>.release {
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span>;
+}
+
+<span class="cm">// fires on any change</span>
+<span class="kw">on</span> <span class="pin">BTN</span>.change {
+    <span class="pin">LED</span> <span class="op">=</span> <span class="pin">BTN</span>;
+}
+
+<span class="cm">// analog threshold events</span>
+<span class="kw">on</span> <span class="pin">TEMP</span> <span class="op">&gt;</span> <span class="nm">50</span> {
+    <span class="pin">FAN</span> <span class="op">=</span> <span class="nm">1</span>;
+}
+
+<span class="kw">on</span> <span class="pin">TEMP</span> <span class="op">&lt;</span> <span class="nm">30</span> {
+    <span class="pin">FAN</span> <span class="op">=</span> <span class="nm">0</span>;
+}</pre>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Event</th><th>Triggers when</th></tr></thead>
+        <tbody>
+          <tr><td>.press</td><td>Pin goes from LOW to HIGH (rising edge)</td></tr>
+          <tr><td>.release</td><td>Pin goes from HIGH to LOW (falling edge)</td></tr>
+          <tr><td>.change</td><td>Pin value changes in either direction</td></tr>
+          <tr><td>&gt; value</td><td>Analog reading exceeds threshold</td></tr>
+          <tr><td>&lt; value</td><td>Analog reading drops below threshold</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- EVERY -->
+  <section class="section" id="every">
+    <h2>Every — Periodic Timers</h2>
+    <p>Run a block of code on a fixed interval, non-blocking. All times are in milliseconds.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="cm">// runs every 1000ms</span>
+<span class="kw">every</span> <span class="nm">1000</span> {
+    count <span class="op">+=</span> <span class="nm">1</span>;
+    print(count);
+}
+
+<span class="cm">// named timer — can be stopped from inside</span>
+<span class="kw">every</span> <span class="nm">500</span> <span class="kw">as</span> ticker {
+    count <span class="op">+=</span> <span class="nm">1</span>;
+    <span class="kw">if</span> (count <span class="op">==</span> <span class="nm">20</span>) {
+        <span class="kw">stop</span> ticker;     <span class="cm">// stops this timer permanently</span>
+    }
+}</pre>
+    </div>
+
+    <div class="callout info">
+      <strong>Named timers</strong> with <code>as label</code> can be stopped using <code>stop label;</code> from inside the timer body. Once stopped, the timer never fires again.
+    </div>
+  </section>
+
+  <!-- FUNCTIONS -->
+  <section class="section" id="functions">
+    <h2>Functions</h2>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="cm">// void function</span>
+<span class="kw">fn</span> <span class="fn">blink</span>(<span class="kw">int</span> times) {
+    <span class="kw">for</span> (<span class="kw">int</span> i <span class="op">=</span> <span class="nm">0</span>; i <span class="op">&lt;</span> times; i <span class="op">+=</span> <span class="nm">1</span>) {
+        <span class="pin">LED</span> <span class="op">=</span> <span class="nm">1</span>;
+        <span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span> <span class="kw">after</span> <span class="nm">200</span>;
+    }
+}
+
+<span class="cm">// function with return value</span>
+<span class="kw">fn</span> <span class="fn">clamp</span>(<span class="kw">int</span> val, <span class="kw">int</span> lo, <span class="kw">int</span> hi) <span class="op">-&gt;</span> <span class="ty">int</span> {
+    <span class="kw">if</span> (val <span class="op">&lt;</span> lo) { <span class="kw">return</span> lo; }
+    <span class="kw">if</span> (val <span class="op">&gt;</span> hi) { <span class="kw">return</span> hi; }
+    <span class="kw">return</span> val;
+}
+
+<span class="cm">// calling functions</span>
+<span class="fn">blink</span>(<span class="nm">3</span>);
+<span class="kw">int</span> safe <span class="op">=</span> <span class="fn">clamp</span>(count, <span class="nm">0</span>, <span class="nm">100</span>);</pre>
+    </div>
+
+    <p>Syntax: <code>fn name(type param, ...) { }</code> for void, or <code>fn name(...) -> type { }</code> for functions that return a value.</p>
+  </section>
+
+  <!-- EXTERN -->
+  <section class="section" id="extern">
+    <h2>Extern Functions</h2>
+    <p>Call vendor SDK functions or C functions from IOTIFT using <code>extern fn</code>.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="cm">// declare the extern at the top of your file</span>
+<span class="kw">extern</span> <span class="kw">fn</span> <span class="fn">esp_restart</span>();
+<span class="kw">extern</span> <span class="kw">fn</span> <span class="fn">esp_deep_sleep</span>(<span class="kw">int</span> ms);
+<span class="kw">extern</span> <span class="kw">fn</span> <span class="fn">Serial_print</span>(<span class="kw">str</span> msg);
+
+<span class="cm">// then call them normally</span>
+<span class="fn">esp_restart</span>();
+<span class="fn">esp_deep_sleep</span>(<span class="nm">60000</span>);</pre>
+    </div>
+  </section>
+
+  <!-- STRUCTS -->
+  <section class="section" id="structs">
+    <h2>Structs</h2>
+    <p>Group related state into named structs.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="kw">struct</span> Sensor {
+    <span class="kw">float</span> value;
+    <span class="kw">bool</span>  active;
+    <span class="kw">int</span>   pin;
+}
+
+Sensor temp;
+temp.value  <span class="op">=</span> <span class="nm">0.0</span>;
+temp.active <span class="op">=</span> <span class="kw">true</span>;
+temp.pin    <span class="op">=</span> <span class="nm">34</span>;</pre>
+    </div>
+  </section>
+
+  <!-- ARRAYS -->
+  <section class="section" id="arrays">
+    <h2>Arrays</h2>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="kw">int</span> readings[<span class="nm">10</span>];
+
+readings[<span class="nm">0</span>] <span class="op">=</span> <span class="nm">42</span>;
+readings[<span class="nm">1</span>] <span class="op">=</span> <span class="nm">17</span>;
+
+<span class="kw">int</span> val <span class="op">=</span> readings[<span class="nm">0</span>];</pre>
+    </div>
+  </section>
+
+  <!-- IMPORT -->
+  <section class="section" id="import">
+    <h2>Import</h2>
+    <p>Split large programs across multiple files.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre><span class="kw">import</span> <span class="str">"sensors.iot"</span>;
+<span class="kw">import</span> <span class="str">"wifi.iot"</span>;
+<span class="kw">import</span> <span class="str">"utils.iot"</span>;</pre>
+    </div>
+  </section>
+
+  <!-- PRINT -->
+  <section class="section" id="print">
+    <h2>Print</h2>
+    <p>Output values to the serial console for debugging.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">iotift</div>
+      </div>
+      <pre>print(<span class="str">"hello world"</span>);
+print(count);
+print(temp);</pre>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- EXAMPLES -->
+  <section class="section" id="ex-blink">
+    <div class="section-label">Examples</div>
+    <h2>LED Blink</h2>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">blink.iot</div>
+      </div>
+      <pre><span class="kw">@device</span> arduino_uno
+
+<span class="kw">pin</span> <span class="pin">LED</span> <span class="op">=</span> <span class="kw">output</span> <span class="nm">13</span>;
+
+<span class="kw">every</span> <span class="nm">1000</span> {
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">1</span>;
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span> <span class="kw">after</span> <span class="nm">500</span>;
+}</pre>
+    </div>
+  </section>
+
+  <section class="section" id="ex-button">
+    <h2>Button + LED</h2>
+    <p>LED turns on when button is pressed, turns off 200ms later automatically.</p>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">button.iot</div>
+      </div>
+      <pre><span class="kw">@device</span> arduino_nano
+
+<span class="kw">pin</span> <span class="pin">LED</span> <span class="op">=</span> <span class="kw">output</span> <span class="nm">12</span>;
+<span class="kw">pin</span> <span class="pin">BTN</span> <span class="op">=</span> <span class="kw">input</span>  <span class="nm">5</span>;
+
+<span class="kw">int</span> pressCount <span class="op">=</span> <span class="nm">0</span>;
+
+<span class="kw">on</span> <span class="pin">BTN</span>.press {
+    <span class="pin">LED</span>        <span class="op">=</span> <span class="nm">1</span>;
+    <span class="pin">LED</span>        <span class="op">=</span> <span class="nm">0</span> <span class="kw">after</span> <span class="nm">200</span>;
+    pressCount <span class="op">+=</span> <span class="nm">1</span>;
+    print(pressCount);
+}</pre>
+    </div>
+  </section>
+
+  <section class="section" id="ex-full">
+    <h2>Full Program</h2>
+    <p>Temperature-controlled fan with LED status indicator and auto-restart after 100 cycles.</p>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">full.iot</div>
+      </div>
+      <pre><span class="kw">@device</span> esp32
+
+<span class="cm">// ── pins ──</span>
+<span class="kw">pin</span> <span class="pin">LED</span>  <span class="op">=</span> <span class="kw">output</span> <span class="nm">12</span>;
+<span class="kw">pin</span> <span class="pin">BTN</span>  <span class="op">=</span> <span class="kw">input</span>  <span class="nm">5</span>;
+<span class="kw">pin</span> <span class="pin">TEMP</span> <span class="op">=</span> <span class="kw">analog</span> <span class="nm">34</span>;
+<span class="kw">pin</span> <span class="pin">FAN</span>  <span class="op">=</span> <span class="kw">output</span> <span class="nm">18</span>;
+
+<span class="cm">// ── state ──</span>
+<span class="kw">int</span>   count   <span class="op">=</span> <span class="nm">0</span>;
+<span class="kw">float</span> tempVal <span class="op">=</span> <span class="nm">0.0</span>;
+<span class="kw">bool</span>  fanOn   <span class="op">=</span> <span class="kw">false</span>;
+
+<span class="cm">// ── extern ──</span>
+<span class="kw">extern</span> <span class="kw">fn</span> <span class="fn">esp_restart</span>();
+
+<span class="cm">// ── events ──</span>
+<span class="kw">on</span> <span class="pin">BTN</span>.press {
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">1</span>;
+    <span class="pin">LED</span> <span class="op">=</span> <span class="nm">0</span> <span class="kw">after</span> <span class="nm">200</span>;
+}
+
+<span class="cm">// ── timers ──</span>
+<span class="kw">every</span> <span class="nm">1000</span> {
+    count   <span class="op">+=</span> <span class="nm">1</span>;
+    tempVal <span class="op">=</span> <span class="nm">25</span>;
+    print(count);
+
+    <span class="kw">if</span> (tempVal <span class="op">&gt;</span> <span class="nm">50</span>) {
+        <span class="pin">FAN</span>   <span class="op">=</span> <span class="nm">1</span>;
+        fanOn <span class="op">=</span> <span class="kw">true</span>;
+    } <span class="kw">else</span> {
+        <span class="pin">FAN</span>   <span class="op">=</span> <span class="nm">0</span>;
+        fanOn <span class="op">=</span> <span class="kw">false</span>;
+    }
+}
+
+<span class="cm">// ── main loop ──</span>
+<span class="kw">void</span> <span class="kw">loop</span>() {
+    <span class="kw">if</span> (count <span class="op">==</span> <span class="nm">100</span>) {
+        print(<span class="str">"restarting"</span>);
+        <span class="fn">esp_restart</span>();
+    }
+}</pre>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- QUICK REF -->
+  <section class="section" id="quickref">
+    <div class="section-label">Reference</div>
+    <h2>Quick Reference</h2>
+
+    <div class="qr-grid">
+      <div class="qr-card">
+        <div class="qr-card-title">Pins</div>
+        <pre><span class="kw">pin</span> <span class="pin">X</span> = <span class="kw">output</span> <span class="nm">12</span>;
+<span class="kw">pin</span> <span class="pin">X</span> = <span class="kw">input</span>  <span class="nm">5</span>;
+<span class="kw">pin</span> <span class="pin">X</span> = <span class="kw">analog</span> <span class="nm">34</span>;
+<span class="pin">X</span> = <span class="nm">1</span>;
+<span class="pin">X</span> = <span class="nm">0</span> <span class="kw">after</span> <span class="nm">200</span>;</pre>
+      </div>
+      <div class="qr-card">
+        <div class="qr-card-title">Variables</div>
+        <pre><span class="kw">int</span>   x = <span class="nm">0</span>;
+<span class="kw">float</span> y = <span class="nm">0.0</span>;
+<span class="kw">bool</span>  b = <span class="kw">false</span>;
+<span class="kw">str</span>   s = <span class="str">"hi"</span>;
+<span class="kw">const</span> <span class="kw">int</span> M = <span class="nm">100</span>;</pre>
+      </div>
+      <div class="qr-card">
+        <div class="qr-card-title">Events</div>
+        <pre><span class="kw">on</span> <span class="pin">BTN</span>.press   { }
+<span class="kw">on</span> <span class="pin">BTN</span>.release { }
+<span class="kw">on</span> <span class="pin">BTN</span>.change  { }
+<span class="kw">on</span> <span class="pin">TEMP</span> > <span class="nm">50</span>  { }
+<span class="kw">on</span> <span class="pin">TEMP</span> < <span class="nm">30</span>  { }</pre>
+      </div>
+      <div class="qr-card">
+        <div class="qr-card-title">Timers</div>
+        <pre><span class="kw">every</span> <span class="nm">1000</span> { }
+<span class="kw">every</span> <span class="nm">500</span> <span class="kw">as</span> t {
+    <span class="kw">stop</span> t;
+}</pre>
+      </div>
+      <div class="qr-card">
+        <div class="qr-card-title">Functions</div>
+        <pre><span class="kw">fn</span> <span class="fn">foo</span>(<span class="kw">int</span> x) { }
+<span class="kw">fn</span> <span class="fn">bar</span>() -> <span class="ty">int</span> {
+    <span class="kw">return</span> <span class="nm">1</span>;
+}
+<span class="kw">extern</span> <span class="kw">fn</span> <span class="fn">baz</span>();</pre>
+      </div>
+      <div class="qr-card">
+        <div class="qr-card-title">Control Flow</div>
+        <pre><span class="kw">if</span> (x) { } <span class="kw">else</span> { }
+<span class="kw">while</span> (x < <span class="nm">10</span>) { }
+<span class="kw">for</span> (<span class="kw">int</span> i=<span class="nm">0</span>; i<<span class="nm">5</span>; i+=<span class="nm">1</span>) { }
+<span class="kw">loop</span> { }
+<span class="kw">break</span>;  <span class="kw">continue</span>;</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- DEVICES -->
+  <section class="section" id="devices">
+    <h2>Supported Devices</h2>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>@device tag</th><th>Board</th><th>millis() source</th></tr></thead>
+        <tbody>
+          <tr><td>arduino_uno</td><td>Arduino Uno / compatible</td><td><code>millis()</code></td></tr>
+          <tr><td>arduino_nano</td><td>Arduino Nano / Mini</td><td><code>millis()</code></td></tr>
+          <tr><td>esp32</td><td>ESP32 family</td><td><code>esp_timer_get_time()</code></td></tr>
+          <tr><td>rpi_pico</td><td>Raspberry Pi Pico</td><td><code>to_ms_since_boot()</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout info">
+      <strong>Adding a new device:</strong> Edit the <code>HAL</code> dictionary in <code>codegen.py</code> and add a new entry with the correct <code>millis</code> expression for that platform.
+    </div>
+  </section>
+
+</main>
+
+<script>
+  // highlight active nav link on scroll
+  const links   = document.querySelectorAll('.nav-link');
+  const sections = document.querySelectorAll('.section, .hero');
+
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const id = e.target.id;
+        const active = document.querySelector(`.nav-link[href="#${id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+
+  sections.forEach(s => obs.observe(s));
+</script>
+</body>
+</html>

@@ -1,0 +1,95 @@
+@device esp32;
+
+pin LED  = output 12;
+pin BTN  = input  5;
+
+int x = 0;
+int y = 5;
+
+every 1000 {
+x += 1;
+
+
+if (x > 2) {
+    if (x < 10) {
+        LED = 1;
+
+        if (x % 2 == 0) {
+            LED = 0 after 200;
+
+            if (x > 4) {
+                LED = 1 after 400;
+            } else {
+                LED = 0 after 300;
+            }
+
+        } else {
+            if (x == 5) {
+                LED = 1;
+            } else {
+                LED = 0;
+            }
+        }
+
+    } else {
+        if (x >= 10) {
+            LED = 0;
+        }
+    }
+
+} else {
+    if (y == 5) {
+        LED = 1;
+    } else {
+        LED = 0;
+    }
+}
+
+
+}
+
+on BTN.press {
+if (x > 3) {
+if (x < 8) {
+LED = 1;
+
+
+        if (y == 5) {
+            LED = 0 after 100;
+        } else {
+            LED = 1 after 200;
+        }
+
+    } else {
+        LED = 0;
+    }
+
+} else {
+    LED = 1;
+}
+
+
+}
+
+void loop() {
+if (x > 15) {
+if (x < 20) {
+print("mid range");
+
+
+        if (x == 17) {
+            print("exact 17");
+        } else {
+            print("not 17");
+        }
+
+    } else {
+        print("high value");
+    }
+
+} else {
+    print("low value");
+}
+
+
+}

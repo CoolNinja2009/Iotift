@@ -1,0 +1,26 @@
+@device esp32
+
+pin R = pwm 13;
+pin G = pwm 12;
+pin B = pwm 14;
+
+R.setup(1000, 10);
+G.setup(1000, 10);
+B.setup(1000, 10);
+
+float r = 0.0;
+float g = 0.0;
+float b = 0.0;
+float t = 0.0;
+
+every 10 {
+    t = millis();
+
+    r = 255 - (127.5 + 127.5 * sin(t * 0.001));
+    g = 255 - (127.5 + 127.5 * sin(t * 0.001 + 2.094));
+    b = 255 - (127.5 + 127.5 * sin(t * 0.001 + 4.189));
+
+    R.write(r);
+    G.write(g);
+    B.write(b);
+}

@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IOTIFT Language Documentation</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,600;1,400&family=Barlow:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0a0c0f;
+    --bg2:       #111318;
+    --bg3:       #181c23;
+    --border:    #1e2530;
+    --accent:    #00e5ff;
+    --accent2:   #ff6b35;
+    --accent3:   #a8ff3e;
+    --text:      #c8d0dc;
+    --text-dim:  #5a6478;
+    --text-head: #eef1f6;
+    --keyword:   #00e5ff;
+    --string:    #a8ff3e;
+    --comment:   #3d4f63;
+    --number:    #ff9f43;
+    --type:      #ff6b35;
+    --fn:        #c792ea;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Barlow', sans-serif;
+    font-weight: 300;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* ── NOISE TEXTURE ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 260px;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    z-index: 100;
+    padding: 0 0 40px;
+  }
+
+  .sidebar::-webkit-scrollbar { width: 4px; }
+  .sidebar::-webkit-scrollbar-track { background: transparent; }
+  .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .logo {
+    padding: 28px 24px 24px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+
+  .logo-name {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: -0.5px;
+  }
+
+  .logo-name span { color: var(--accent2); }
+
+  .logo-tag {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+
+  .nav-section {
+    padding: 8px 24px 4px;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .nav-link {
+    display: block;
+    padding: 6px 24px;
+    font-size: 13.5px;
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.15s, background 0.15s;
+    font-family: 'IBM Plex Mono', monospace;
+    border-left: 2px solid transparent;
+  }
+
+  .nav-link:hover {
+    color: var(--text-head);
+    background: var(--bg3);
+    border-left-color: var(--accent);
+  }
+
+  .nav-link.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+  }
+
+  /* ── MAIN CONTENT ── */
+  .main {
+    margin-left: 260px;
+    max-width: 860px;
+    padding: 60px 64px 120px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── HERO ── */
+  .hero {
+    padding-bottom: 64px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 64px;
+  }
+
+  .hero-eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 16px;
+  }
+
+  .hero h1 {
+    font-size: 56px;
+    font-weight: 900;
+    color: var(--text-head);
+    line-height: 1.05;
+    letter-spacing: -2px;
+    margin-bottom: 20px;
+  }
+
+  .hero h1 span { color: var(--accent); }
+
+  .hero-sub {
+    font-size: 18px;
+    color: var(--text);
+    max-width: 600px;
+    line-height: 1.6;
+    font-weight: 300;
+  }
+
+  .badge-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 28px;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+  }
+
+  .badge-cyan  { background: rgba(0,229,255,0.1);  color: var(--accent);  border: 1px solid rgba(0,229,255,0.25); }
+  .badge-orange{ background: rgba(255,107,53,0.1); color: var(--accent2); border: 1px solid rgba(255,107,53,0.25); }
+  .badge-green { background: rgba(168,255,62,0.1); color: var(--accent3); border: 1px solid rgba(168,255,62,0.25); }
+
+  /* ── SECTIONS ── */
+  .section {
+    margin-bottom: 72px;
+    scroll-margin-top: 32px;
+    opacity: 0;
+    transform: translateY(30px);
+    transition: all 0.6s cubic-bezier(0.25, 0.1, 0.25, 1);
+  }
+
+  .section.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent2);
+    margin-bottom: 10px;
+  }
+
+  h2 {
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--text-head);
+    letter-spacing: -0.8px;
+    margin-bottom: 16px;
+  }
+
+  h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-head);
+    letter-spacing: -0.3px;
+    margin: 32px 0 10px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  p {
+    font-size: 15px;
+    color: var(--text);
+    margin-bottom: 14px;
+    line-height: 1.75;
+  }
+
+  /* ── CODE BLOCKS ── */
+  .code-block {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 16px 0 24px;
+    position: relative;
+    transition: all 0.3s ease;
+  }
+
+  .code-block:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.1);
+  }
+
+  .code-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .code-lang {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .code-dots { display: flex; gap: 5px; }
+  .code-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot-r { background: #ff5f57; }
+  .dot-y { background: #ffbd2e; }
+  .dot-g { background: #28ca42; }
+
+  .copy-btn {
+    background: rgba(255,255,255,0.08);
+    color: var(--text-dim);
+    border: none;
+    padding: 4px 10px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .copy-btn:hover {
+    background: var(--accent);
+    color: #000;
+  }
+
+  pre {
+    padding: 20px 22px;
+    overflow-x: auto;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13.5px;
+    line-height: 1.7;
+    tab-size: 4;
+    position: relative;
+  }
+
+  pre::-webkit-scrollbar { height: 4px; }
+  pre::-webkit-scrollbar-track { background: transparent; }
+  pre::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* syntax highlighting */
+  .kw  { color: var(--keyword); font-weight: 600; }
+  .str { color: var(--string); }
+  .cm  { color: var(--comment); font-style: italic; }
+  .nm  { color: var(--number); }
+  .ty  { color: var(--type); }
+  .fn  { color: var(--fn); }
+  .pin { color: var(--accent); }
+  .op  { color: var(--text-dim); }
+
+  /* ── INLINE CODE ── */
+  code {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 6px;
+    color: var(--accent);
+  }
+
+  /* ── TABLE ── */
+  .table-wrap { overflow-x: auto; margin: 16px 0 24px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+  }
+
+  th {
+    background: var(--bg3);
+    color: var(--text-dim);
+    font-weight: 400;
+    text-align: left;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-size: 11px;
+  }
+
+  td {
+    padding: 9px 14px;
+    border: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+
+  tr:nth-child(even) td { background: rgba(255,255,255,0.015); }
+
+  /* ── CALLOUT ── */
+  .callout {
+    border-left: 3px solid var(--accent2);
+    background: rgba(255,107,53,0.05);
+    border-radius: 0 6px 6px 0;
+    padding: 14px 18px;
+    margin: 16px 0 24px;
+    font-size: 14px;
+  }
+
+  .callout.info {
+    border-left-color: var(--accent);
+    background: rgba(0,229,255,0.05);
+  }
+
+  .callout.good {
+    border-left-color: var(--accent3);
+    background: rgba(168,255,62,0.05);
+  }
+
+  .callout strong { color: var(--text-head); font-weight: 600; }
+
+  /* ── DIVIDER ── */
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 48px 0;
+  }
+
+  /* ── QUICK REF GRID ── */
+  .qr-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+    margin: 16px 0 24px;
+  }
+
+  .qr-card {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+    transition: transform 0.3s ease;
+  }
+
+  .qr-card:hover {
+    transform: translateY(-4px);
+  }
+
+  .qr-card-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+  }
+
+  .qr-card pre {
+    padding: 0;
+    font-size: 12.5px;
+    background: none;
+    border: none;
+  }
+
+  /* Toast */
+  #toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--accent);
+    color: #000;
+    padding: 12px 24px;
+    border-radius: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    opacity: 0;
+    transition: all 0.3s ease;
+    z-index: 1000;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── SIDEBAR ── -->
+<nav class="sidebar">
+  <div class="logo">
+    <div class="logo-name">IOT<span>IFT</span></div>
+    <div class="logo-tag">Language Reference v2.0</div>
+  </div>
+
+  <div class="nav-section">Getting Started</div>
+  <a class="nav-link" href="#intro">Introduction</a>
+  <a class="nav-link" href="#install">Installation</a>
+  <a class="nav-link" href="#cli">CLI Reference</a>
+  <a class="nav-link" href="#platformio">PlatformIO</a>
+  <a class="nav-link" href="#hello">Hello World</a>
+
+  <div class="nav-section">Language</div>
+  <a class="nav-link" href="#device">Device Target</a>
+  <a class="nav-link" href="#pins">Pins</a>
+  <a class="nav-link" href="#variables">Variables</a>
+  <a class="nav-link" href="#assignment">Assignment</a>
+  <a class="nav-link" href="#after">After</a>
+  <a class="nav-link" href="#events">Events</a>
+  <a class="nav-link" href="#every">Every</a>
+  <a class="nav-link" href="#loops">Control Flow</a>
+  <a class="nav-link" href="#functions">Functions</a>
+  <a class="nav-link" href="#extern">Extern</a>
+  <a class="nav-link" href="#structs">Structs</a>
+  <a class="nav-link" href="#arrays">Arrays</a>
+  <a class="nav-link" href="#operators">Operators</a>
+  <a class="nav-link" href="#import">Import</a>
+  <a class="nav-link" href="#print">Print</a>
+  <a class="nav-link" href="#cblocks">C Blocks</a>
+  <a class="nav-link" href="#math">Math</a>
+
+  <div class="nav-section">Examples</div>
+  <a class="nav-link" href="#ex-rgb">RGB Rainbow</a>
+  <a class="nav-link" href="#ex-horn">Budget Horn</a>
+  <a class="nav-link" href="#ex-full">Full Program</a>
+
+  <div class="nav-section">Reference</div>
+  <a class="nav-link" href="#quickref">Quick Reference</a>
+</nav>
+
+<!-- ── MAIN ── -->
+<main class="main">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="hero-eyebrow">// documentation</div>
+    <h1>IOT<span>IFT</span></h1>
+    <p class="hero-sub">Minimal IoT language. Hardware-first syntax. Non-blocking by default. Compiles to optimized C for ESP32. One-command flash workflow.</p>
+    <div class="badge-row">
+      <span class="badge badge-cyan">ESP32 Native</span>
+      <span class="badge badge-orange">PlatformIO Ready</span>
+      <span class="badge badge-green">Auto Port Detect</span>
+    </div>
+  </div>
+
+  <!-- INTRODUCTION -->
+  <section class="section" id="intro">
+    <div class="section-label">Introduction</div>
+    <h2>What is IOTIFT?</h2>
+    <p>Domain-specific language for IoT/microcontroller programming. Reads like pseudocode, compiles to production C.</p>
+    <p>No manual timers, interrupts, or state machines. <code>LED = 0 after 200;</code> generates non-blocking scheduler automatically.</p>
+
+    <div class="callout good">
+      <strong>Core philosophy:</strong> Replace common IoT C boilerplate with one clean line.
+    </div>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">rgb.iot</div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><span class="kw">pin</span> <span class="pin">R</span> = <span class="kw">pwm</span> <span class="nm">13</span>;
+<span class="kw">pin</span> <span class="pin">G</span> = <span class="kw">pwm</span> <span class="nm">12</span>;
+<span class="kw">pin</span> <span class="pin">B</span> = <span class="kw">pwm</span> <span class="nm">14</span>;
+
+<span class="kw">float</span> t = <span class="nm">0.0</span>;
+
+<span class="kw">every</span> <span class="nm">10</span> {
+    t = <span class="nm">millis</span>();
+    <span class="pin">R</span> = sin(t * <span class="nm">0.001</span>);
+    <span class="pin">G</span> = sin(t * <span class="nm">0.001</span> + <span class="nm">2.09</span>);
+    <span class="pin">B</span> = sin(t * <span class="nm">0.001</span> + <span class="nm">4.18</span>);
+}</pre>
+    </div>
+  </section>
+
+  <!-- INSTALLATION -->
+  <section class="section" id="install">
+    <div class="section-label">Setup</div>
+    <h2>Installation</h2>
+    <p>Python 3.10+. No dependencies - compiler auto-installs PlatformIO/pyserial.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">bash</div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><span class="cm"># download iotift.py + supporting files</span>
+python iotift.py led.iot --flash</pre>
+    </div>
+
+    <div class="callout good">
+      <strong>One command deploys:</strong> Generates project, auto-detects ESP32 port, builds, flashes. Auto-installs everything.
+    </div>
+  </section>
+
+  <!-- CLI -->
+  <section class="section" id="cli">
+    <div class="section-label">CLI</div>
+    <h2>Compiler Reference</h2>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">bash</div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre>python iotift.py INPUT.iot [options]
+
+<span class="kw">Basic:</span>
+  -o FILE        Output C file
+  --device NAME  Target (esp32 default)
+  --ast          Debug AST dump
+
+<span class="kw">PlatformIO:</span>
+  --project      Generate PlatformIO project
+  --flash        Project + build + flash
+  --port PORT    Serial port (auto-detects)</pre>
+    </div>
+  </section>
+
+  <!-- PLATFORMIO -->
+  <section class="section" id="platformio">
+    <h2>PlatformIO Workflow</h2>
+    <p><code>--flash</code> creates complete PlatformIO project, builds optimized firmware, flashes ESP32.</p>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">bash</div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre>python iotift.py led.iot --flash
+<span class="cm"># ✓ PlatformIO installed
+# ✓ ESP32 found on COM3
+# ✓ Building and flashing...</span></pre>
+    </div>
+  </section>
+
+  <!-- HELLO WORLD -->
+  <section class="section" id="hello">
+    <div class="section-label">Examples</div>
+    <h2>Hello World — RGB Rainbow</h2>
+
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">led.iot</div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><span class="kw">@device</span> esp32
+
+<span class="kw">pin</span> <span class="pin">R</span> = <span class="kw">pwm</span> <span class="nm">13</span>;
+<span class="kw">pin</span> <span class="pin">G</span> = <span class="kw">pwm</span> <span class="nm">12</span>;
+<span class="kw">pin</span> <span class="pin">B</span> = <span class="kw">pwm</span> <span class="nm">14</span>;
+
+c <span class="kw">setup</span> {{
+    ledcSetup(0, 5000, 8);
+    ledcAttachPin(13, 0);
+    ledcAttachPin(12, 1);
+    ledcAttachPin(14, 2);
+}}
+
+<span class="kw">every</span> <span class="nm">10</span> {{
+    t = <span class="nm">millis</span>();
+    <span class="pin">R</span> = sin(t * 0.001);
+    <span class="pin">G</span> = sin(t * 0.001 + 2.09);
+    <span class="pin">B</span> = sin(t * 0.001 + 4.18);
+}}</pre>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- LANGUAGE FEATURES -->
+  <section class="section" id="device">
+    <div class="section-label">Language</div>
+    <h2>@device</h2>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><span class="kw">@device</span> esp32</pre>
+    </div>
+  </section>
+
+  <section class="section" id="pins">
+    <h2>Pins</h2>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><span class="kw">pin</span> <span class="pin">LED</span>  = <span class="kw">output</span>  <span class="nm">13</span>;
+<span class="kw">pin</span> <span class="pin">BTN</span>  = <span class="kw">input</span>   <span class="nm">5</span>;
+<span class="kw">pin</span> <span class="pin">TEMP</span> = <span class="kw">analog</span> <span class="nm">34</span>;
+<span class="kw">pin</span> <span class="pin">PWM</span>  = <span class="kw">pwm</span>    <span class="nm">18</span>;</pre>
+    </div>
+  </section>
+
+  <section class="section" id="variables">
+    <h2>Variables</h2>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><span class="kw">int</span>   count   = <span class="nm">0</span>;
+<span class="kw">float</span> temp    = <span class="nm">0.0</span>;
+<span class="kw">bool</span>  active  = <span class="kw">false</span>;
+<span class="kw">const</span> <span class="kw">int</span> MAX = <span class="nm">100</span>;</pre>
+    </div>
+  </section>
+
+  <section class="section" id="after">
+    <h2>After — Non-blocking Delay</h2>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><span class="pin">LED</span> = <span class="nm">1</span>;
+<span class="pin">LED</span> = <span class="nm">0</span> <span class="kw">after</span> <span class="nm">200</span>;</pre>
+    </div>
+  </section>
+
+  <section class="section" id="events">
+    <h2>Events</h2>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><span class="kw">on</span> BTN.press {{ LED = 1; }}
+<span class="kw">on</span> TEMP > <span class="nm">50</span> {{ FAN = 1; }}</pre>
+    </div>
+  </section>
+
+  <section class="section" id="every">
+    <h2>Every — Timers</h2>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><span class="kw">every</span> <span class="nm">1000</span> {{ count++; }}
+<span class="kw">every</span> <span class="nm">500</span> <span class="kw">as</span> ticker {{ <span class="kw">stop</span> ticker; }}</pre>
+    </div>
+  </section>
+
+  <section class="section" id="cblocks">
+    <h2>C Blocks</h2>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre>c <span class="kw">setup</span> {{
+    ledcSetup(0, 5000, 8);
+}}</pre>
+    </div>
+  </section>
+
+  <!-- EXAMPLES -->
+  <section class="section" id="ex-rgb">
+    <h2>RGB Rainbow</h2>
+    <!-- (same as hello world above) -->
+  </section>
+
+  <section class="section" id="ex-horn">
+    <h2>Budget Horn Controller</h2>
+    <div class="code-block">
+      <div class="code-block-header">
+        <div class="code-dots"><div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div></div>
+        <div class="code-lang">horn.iot</div>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><span class="kw">@device</span> esp32
+<span class="kw">pin</span> <span class="pin">BTN</span> = <span class="kw">input</span> <span class="nm">4</span>;
+<span class="kw">pin</span> <span class="pin">BUZZ</span> = <span class="kw">output</span> <span class="nm">18</span>;
+
+<span class="kw">const</span> <span class="nm">30s</span> BUDGET = <span class="nm">30000</span>;
+
+<span class="kw">on</span> <span class="pin">BTN</span>.press {{
+    BUZZ = 1;
+}}
+
+<span class="kw">every</span> <span class="nm">1s</span> {{
+    used += <span class="nm">1000</span>;
+    <span class="kw">if</span> (used > BUDGET) BUZZ = 0;
+}}</pre>
+    </div>
+  </section>
+
+  <!-- QUICK REF -->
+  <section class="section" id="quickref">
+    <div class="section-label">Quick Reference</div>
+    <h2>Cheat Sheet</h2>
+    <div class="qr-grid">
+      <!-- Cards with copy buttons added in JS if needed -->
+      <div class="qr-card">
+        <div class="qr-card-title">Pins &amp; After</div>
+        <pre><span class="kw">pin</span> LED = <span class="kw">output</span> <span class="nm">13</span>;
+<span class="pin">LED</span> = 1;
+<span class="pin">LED</span> = 0 <span class="kw">after</span> <span class="nm">200</span>;</pre>
+      </div>
+      <!-- more cards... -->
+    </div>
+  </section>
+
+</main>
+
+<div id="toast">Copied to clipboard ✓</div>
+
+<script>
+  // Intersection Observer for section animations
+  const sections = document.querySelectorAll('.section');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.1 });
+
+  sections.forEach(section => observer.observe(section));
+
+  // Copy to clipboard
+  function copyCode(btn) {
+    const codeBlock = btn.parentElement.parentElement.querySelector('pre');
+    const text = codeBlock.textContent;
+
+    navigator.clipboard.writeText(text).then(() => {
+      const toast = document.getElementById('toast');
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateX(-50%) translateY(0)';
+      
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(-50%) translateY(20px)';
+      }, 2000);
+    });
+  }
+
+  // Keyboard shortcut: Ctrl/Cmd + K to focus search (future)
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      // Could add search later
+    }
+  });
+
+  // Active nav highlighting
+  const links = document.querySelectorAll('.nav-link');
+  const obsNav = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const id = e.target.id;
+        const active = document.querySelector(`.nav-link[href="#${id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+
+  document.querySelectorAll('.section, .hero').forEach(s => obsNav.observe(s));
+</script>
+</body>
+</html>

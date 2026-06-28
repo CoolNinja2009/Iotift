@@ -1,0 +1,8 @@
+@device esp32;
+
+pin LED = output 12;
+
+every 1000 {
+LED = 1;
+LED = 0 after 500;
+}
