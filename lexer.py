@@ -82,6 +82,8 @@ KEYWORDS = frozenset({
     'uart', 'adc', 'dac',
     # Pin events (contextual — both intuitive and technical names coexist)
     'rising', 'falling', 'change', 'press', 'release',
+    # WiFi (only 'wifi' needed for top-level dispatch; rest are contextual)
+    'wifi',
     # Other
     'import', 'from', 'print', 'println', 'sizeof',
     # Scheduler / timer extensions

@@ -187,10 +187,23 @@ class OnEvent(Node):
     on BTN.rising { ... }
     on BTN.falling { ... }
     on BTN.change { ... }
+    on home.connect { ... }       // WiFi events
+    on home.disconnect { ... }
     """
-    pin: str = ''
-    event: str = ''            # press | release | change | rising | falling
+    target: str = ''             # pin name or wifi name (was 'pin')
+    event: str = ''              # press|release|change|rising|falling
+                                 #   |connect|disconnect|got_ip|scan_done
+                                 #   |client_join|client_leave
     body: List[Node] = field(default_factory=list)
+
+    # Backward-compat alias: code reading .pin gets .target
+    @property
+    def pin(self) -> str:
+        return self.target
+
+    @pin.setter
+    def pin(self, value: str) -> None:
+        self.target = value
 
 
 @dataclass
@@ -263,6 +276,35 @@ class PeripheralDecl(Node):
     periph_type: str = ''        # 'i2c' | 'spi' | 'uart'
     name: str = ''               # 'bus0', 'serial1'
     config: dict = field(default_factory=dict)
+
+
+@dataclass
+class WifiDecl(Node):
+    """
+    wifi home {
+        ssid: "MyWiFi";
+        password: "mypassword";
+    }
+    wifi office {
+        mode: sta;
+        ssid: "OfficeNet";
+        password: "office123";
+        hostname: "iotift-sensor";
+        connect_timeout: 30s;
+        retry: exponential;
+        power_save: light;
+        static_ip: "192.168.1.100";
+        gateway: "192.168.1.1";
+        subnet: "255.255.255.0";
+        dns: "8.8.8.8";
+    }
+    """
+    name: str = ''
+    mode: str = 'sta'            # 'sta' | 'ap'
+    config: dict = field(default_factory=dict)
+    # config keys: ssid, password, hostname, connect_timeout, retry,
+    #              power_save, static_ip, gateway, subnet, dns,
+    #              channel, max_clients, hidden
 
 
 # ─────────────────────────────────────────

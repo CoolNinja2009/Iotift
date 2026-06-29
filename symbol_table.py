@@ -30,6 +30,7 @@ class SymbolKind(PyEnum):
     LABEL      = 'label'       # named timer label
     TYPE       = 'type'        # type alias
     PERIPHERAL = 'peripheral'  # i2c/spi/uart peripheral
+    WIFI       = 'wifi'        # wifi declaration
 
 
 @dataclass
@@ -119,6 +120,21 @@ W_IMPLICIT_NARROWING = 'implicit-narrowing'
 W_EMPTY_BODY = 'empty-body'
 W_VOID_LOOP_DEPRECATED = 'void-loop-deprecated'
 
+# WiFi-specific warnings (Milestone 8)
+W_WIFI_NO_PASSWORD = 'wifi-no-password'
+W_WIFI_SHORT_PASSWORD = 'wifi-short-password'
+W_WIFI_OPEN_AP = 'wifi-open-ap'
+W_WIFI_UNSUPPORTED_TARGET = 'wifi-unsupported-target'
+W_WIFI_DUAL_STA = 'wifi-dual-sta'
+W_WIFI_BLOCKING_IN_HANDLER = 'wifi-blocking-in-handler'
+W_WIFI_SCAN_OUTSIDE_HANDLER = 'wifi-scan-outside-handler'
+W_WIFI_STATIC_IP_INCOMPLETE = 'wifi-static-ip-incomplete'
+W_WIFI_INVALID_CHANNEL = 'wifi-invalid-channel'
+W_WIFI_DUPLICATE_SSID = 'wifi-duplicate-ssid'
+W_WIFI_UNUSED = 'wifi-unused'
+W_WIFI_NO_CONNECT_HANDLER = 'wifi-no-connect-handler'
+W_WIFI_STATIC_IP_NO_DNS = 'wifi-static-ip-no-dns'
+
 
 class SymbolTable:
     """Top-level symbol table manager."""
@@ -137,6 +153,9 @@ class SymbolTable:
         self.pwm_channel: int = 0
         # Import tracking
         self.imports: List[str] = []
+        # WiFi tracking (Milestone 8)
+        self.wifi_decls: Dict[str, Any] = {}  # name → WifiDecl AST node
+        self._wifi_state_enum_generated: bool = False
         # Warnings collected during analysis
         self.warnings: List[str] = []
         self.errors: List[str] = []

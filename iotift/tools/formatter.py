@@ -30,6 +30,7 @@ from ast_nodes import (
     BinOp, UnaryOp, MemberAccess, ArrayAccess, Literal, Identifier,
     FnCall, MethodCall, PwmSetup, PwmWrite, MillisExpr, MathExpr,
     CastExpr, SizeOfExpr, PinConfig,
+    WifiDecl,
 )
 
 INDENT = '    '  # 4 spaces
@@ -400,6 +401,54 @@ class Formatter:
             config_items.append(f'{key}: {self._fmt_value(val)}')
         self._emit(', '.join(config_items))
         self._emit('};')
+
+    def _fmt_WifiDecl(self, node: WifiDecl) -> None:
+        """Format wifi NAME { ... } declaration."""
+        self._emit(f'wifi {node.name} {{')
+        config = node.config
+        keys = list(config.keys())
+
+        # If short (≤3 keys, ≤80 chars on one line), emit inline
+        oneline = ', '.join(
+            f'{k}: {self._fmt_value(v)}' for k, v in config.items()
+        )
+        if len(keys) <= 3 and len(f'wifi {node.name} {{ {oneline} }}') <= 80:
+            self._emit(f' {oneline} }}')
+            return
+
+        # Multiline
+        self._emit_line()
+        self.indent_level += 1
+        for i, key in enumerate(keys):
+            val = config[key]
+            if key == 'retry' and isinstance(val, dict):
+                # Format retry spec
+                retry_kind = val.get('kind', 'fixed')
+                if retry_kind == 'custom':
+                    self._emit(f'{key}: custom {{')
+                    inner = []
+                    for rk in ['count', 'interval', 'max_interval', 'backoff']:
+                        if rk == 'interval' and 'interval_ms' in val:
+                            inner.append(f'interval: {self._fmt_time_literal(val["interval_ms"])}')
+                        elif rk == 'max_interval' and 'max_interval_ms' in val:
+                            inner.append(f'max_interval: {self._fmt_time_literal(val["max_interval_ms"])}')
+                        elif rk in val:
+                            inner.append(f'{rk}: {val[rk]}')
+                    self._emit(', '.join(inner))
+                    self._emit('}')
+                else:
+                    self._emit(f'{key}: {retry_kind}')
+            elif key == 'connect_timeout':
+                self._emit(f'{key}: {self._fmt_time_literal(val)}')
+            else:
+                self._emit(f'{key}: {self._fmt_value(val)}')
+            if i < len(keys) - 1:
+                self._emit(',')
+                self._emit_line()
+            else:
+                self._emit_line(',')
+        self.indent_level -= 1
+        self._emit('}')
 
     # ─────────────────────────────────────
     #  STATEMENTS

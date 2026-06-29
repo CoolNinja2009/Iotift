@@ -1,0 +1,62 @@
+/**
+ * wifi_thermostat.iot — WiFi-connected thermostat
+ *
+ * Demonstrates:
+ *  - WiFi STA with retry, static IP, hostname
+ *  - WiFi event handlers (connect, disconnect, got_ip)
+ *  - Combined pin + WiFi interaction
+ *
+ * Compile:  iotift build examples/wifi_thermostat.iot
+ */
+
+@device esp32
+
+// ── Hardware ─────────────────────────────────────
+pin HEATER = output 4;
+pin COOLER = output 5;
+float target_temp = 22.5;
+
+// ── WiFi ─────────────────────────────────────────
+wifi home {
+    ssid: "MyWiFi";
+    password: "MyPassword";
+    hostname: "iotift-thermostat";
+    retry: forever;
+    connect_timeout: 30s;
+};
+
+// ── WiFi Events ──────────────────────────────────
+on home.got_ip {
+    println("Got IP address: " + home.ip);
+}
+
+on home.connect {
+    println("WiFi connected!");
+    println("IP: " + home.ip);
+    println("RSSI: " + home.rssi);
+}
+
+on home.disconnect {
+    println("WiFi disconnected. Will retry...");
+}
+
+// ── Main loop ────────────────────────────────────
+tick {
+    // Read temperature sensor (simulated via analog pin)
+    float current = analogRead(A0);
+    current = current * 3.3 / 4095.0;
+    current = current * 100.0;
+
+    if current < target_temp - 0.5 {
+        HEATER = 1;
+        COOLER = 0;
+    } else {
+        if current > target_temp + 0.5 {
+            HEATER = 0;
+            COOLER = 1;
+        } else {
+            HEATER = 0;
+            COOLER = 0;
+        }
+    }
+}

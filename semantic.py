@@ -19,6 +19,11 @@ from symbol_table import (
     SymbolTable, SymbolKind, Symbol,
     W_UNUSED_VARIABLE, W_UNUSED_FUNCTION, W_USED_BEFORE_INIT,
     W_IMPLICIT_NARROWING, W_EMPTY_BODY, W_VOID_LOOP_DEPRECATED,
+    W_WIFI_NO_PASSWORD, W_WIFI_SHORT_PASSWORD, W_WIFI_OPEN_AP,
+    W_WIFI_UNSUPPORTED_TARGET, W_WIFI_DUAL_STA, W_WIFI_BLOCKING_IN_HANDLER,
+    W_WIFI_SCAN_OUTSIDE_HANDLER, W_WIFI_STATIC_IP_INCOMPLETE,
+    W_WIFI_INVALID_CHANNEL, W_WIFI_DUPLICATE_SSID,
+    W_WIFI_UNUSED, W_WIFI_NO_CONNECT_HANDLER, W_WIFI_STATIC_IP_NO_DNS,
 )
 from type_system import (
     Type, TypeKind, VOID, BOOL, INT, UINT, FLOAT, STR, CHAR,
@@ -78,6 +83,11 @@ class SemanticAnalyzer:
             'print', 'println',
             'HIGH', 'LOW',
         }
+        # WiFi tracking (Milestone 8)
+        self._wifi_decls: Dict[str, 'WifiDecl'] = {}
+        self._wifi_state_enum_type: Optional[Type] = None
+        # Is the current scope inside a scan_done handler?
+        self._in_scan_done: bool = False
 
     # ─────────────────────────────────────────
     #  PUBLIC API
@@ -175,6 +185,8 @@ class SemanticAnalyzer:
             self._p1_peripheral(node)
         elif isinstance(node, AfterBlock):
             self._p1_after_block(node)
+        elif isinstance(node, WifiDecl):
+            self._p1_wifi(node)
         elif isinstance(node, SchedulerConfig):
             pass  # no symbol registration needed; read by codegen
         elif isinstance(node, (Assign, CompoundAssign, FnCall, MethodCall,
@@ -374,11 +386,16 @@ class SemanticAnalyzer:
         self.symbols.leave_scope()
 
     def _p1_on_event(self, node: OnEvent) -> None:
-        self.symbols.enter_scope(f"on:{node.pin}.{node.event}")
+        self.symbols.enter_scope(f"on:{node.target}.{node.event}")
         node._pass1_scope = self.symbols.current_scope  # type: ignore[attr-defined]
         self.symbols._in_loop = True
+        # Track if we're inside a scan_done handler
+        old_scan = self._in_scan_done
+        if node.event == 'scan_done':
+            self._in_scan_done = True
         for stmt in node.body:
             self._p1_stmt(stmt)
+        self._in_scan_done = old_scan
         self.symbols.leave_scope()
 
     def _p1_after_block(self, node: AfterBlock) -> None:
@@ -395,6 +412,123 @@ class SemanticAnalyzer:
             node.name, SymbolKind.PERIPHERAL, line=node.line,
             is_mutable=False, is_global=True,
         )
+
+    def _p1_wifi(self, node: WifiDecl) -> None:
+        """Register a wifi declaration and validate config."""
+        # Store for later passes
+        self._wifi_decls[node.name] = node
+        self.symbols.wifi_decls[node.name] = node
+
+        sym = self.symbols.define(
+            node.name, SymbolKind.WIFI, line=node.line,
+            is_mutable=False, is_global=True,
+        )
+
+        # Generate WifiState enum once per compilation unit
+        if not self.symbols._wifi_state_enum_generated:
+            self.symbols._wifi_state_enum_generated = True
+            variants = [
+                ('WifiState_Idle', 0),
+                ('WifiState_Connecting', 1),
+                ('WifiState_Connected', 2),
+                ('WifiState_Disconnected', 3),
+            ]
+            et = EnumType('WifiState', variants, backing_type=INT)
+            self.symbols.add_type('WifiState', et)
+            self.symbols.enums['WifiState'] = et
+            self.symbols.define(
+                'WifiState', SymbolKind.ENUM, type=et, line=node.line,
+            )
+            for vname, val in variants:
+                self.symbols.define(
+                    vname, SymbolKind.ENUM_VARIANT, type=et, line=node.line,
+                    init_value=val,
+                )
+
+        # Validate mode
+        mode = node.mode
+        if mode not in ('sta', 'ap'):
+            self.symbols.error(node.line, f"invalid wifi mode '{mode}'; expected 'sta' or 'ap'")
+
+        cfg = node.config
+
+        # STA requires ssid
+        if mode == 'sta' and 'ssid' not in cfg:
+            self.symbols.error(node.line, "STA mode requires 'ssid' config key")
+
+        # AP requires ssid
+        if mode == 'ap' and 'ssid' not in cfg:
+            self.symbols.error(node.line, "AP mode requires 'ssid' config key")
+
+        # Password checks
+        if mode == 'sta' and 'password' not in cfg:
+            self.symbols.warn(
+                node.line,
+                f"STA wifi '{node.name}' declared without password (open network)",
+                W_WIFI_NO_PASSWORD,
+            )
+        if 'password' in cfg:
+            pw = cfg['password']
+            if isinstance(pw, str) and len(pw) < 8:
+                self.symbols.warn(
+                    node.line,
+                    f"WiFi password is less than 8 characters (WPA2 minimum)",
+                    W_WIFI_SHORT_PASSWORD,
+                )
+        if mode == 'ap' and 'password' not in cfg:
+            self.symbols.warn(
+                node.line,
+                f"AP wifi '{node.name}' declared without password (open network)",
+                W_WIFI_OPEN_AP,
+            )
+
+        # Static IP validation
+        if 'static_ip' in cfg:
+            if 'gateway' not in cfg or 'subnet' not in cfg:
+                self.symbols.error(
+                    node.line,
+                    f"'static_ip' requires 'gateway' and 'subnet'",
+                )
+            if 'dns' not in cfg:
+                self.symbols.warn(
+                    node.line,
+                    f"static IP without DNS server specified",
+                    W_WIFI_STATIC_IP_NO_DNS,
+                )
+
+        # Channel validation
+        if 'channel' in cfg:
+            ch = cfg['channel']
+            if isinstance(ch, int) and (ch < 1 or ch > 13):
+                self.symbols.warn(
+                    node.line,
+                    f"WiFi channel {ch} is outside valid range 1-13",
+                    W_WIFI_INVALID_CHANNEL,
+                )
+
+        # Multi-WiFi validation: check for dual STA
+        for other_name, other_decl in self._wifi_decls.items():
+            if other_name != node.name:
+                if node.mode == 'sta' and other_decl.mode == 'sta':
+                    self.symbols.error(
+                        node.line,
+                        f"two STA wifi declarations ('{node.name}' and '{other_name}') "
+                        f"— only one STA interface supported",
+                    )
+                if node.mode == 'ap' and other_decl.mode == 'ap':
+                    self.symbols.error(
+                        node.line,
+                        f"two AP wifi declarations ('{node.name}' and '{other_name}') "
+                        f"— only one AP interface supported",
+                    )
+                # Check for duplicate SSID on AP
+                if node.mode == 'ap' and other_decl.mode == 'ap':
+                    if cfg.get('ssid') == other_decl.config.get('ssid'):
+                        self.symbols.warn(
+                            node.line,
+                            f"two AP declarations with same SSID '{cfg['ssid']}'",
+                            W_WIFI_DUPLICATE_SSID,
+                        )
 
     def _p1_stmt(self, node: Node) -> None:
         """Walk a statement node for inner declarations (Pass 1)."""
@@ -531,6 +665,10 @@ class SemanticAnalyzer:
             self._p2_expr(node)
         elif isinstance(node, MethodCall):
             self._p2_expr(node)
+
+        # WiFi — skip (handled in Pass 1)
+        elif isinstance(node, WifiDecl):
+            pass
 
     def _p2_fn_decl(self, node: FnDecl) -> None:
         self._p2_enter_scope_from_node(node, node.body)
@@ -722,6 +860,18 @@ class SemanticAnalyzer:
                     elif sym.kind == SymbolKind.PERIPHERAL:
                         # Member access on peripherals is validated in Pass 3
                         pass
+                    elif sym.kind == SymbolKind.WIFI:
+                        # Validate WiFi property names
+                        _WIFI_PROPS = {
+                            'state', 'connected', 'ip', 'rssi', 'channel',
+                            'mac', 'clients', 'ssid',
+                        }
+                        if node.member not in _WIFI_PROPS:
+                            self.symbols.error(
+                                node.line,
+                                f"wifi '{node.obj}' has no property '{node.member}' "
+                                f"(valid: {', '.join(sorted(_WIFI_PROPS))})",
+                            )
             else:
                 self._p2_expr(node.obj)
 
@@ -768,6 +918,14 @@ class SemanticAnalyzer:
                         node.line,
                         f"timer '{obj_sym.name}' has no method '{node.method}' "
                         f"(valid: stop, start)",
+                    )
+            elif obj_sym is not None and obj_sym.kind == SymbolKind.WIFI:
+                _WIFI_METHODS = {'scan', 'disconnect'}
+                if node.method not in _WIFI_METHODS:
+                    self.symbols.error(
+                        node.line,
+                        f"wifi '{obj_sym.name}' has no method '{node.method}' "
+                        f"(valid: {', '.join(sorted(_WIFI_METHODS))})",
                     )
             for arg in node.args:
                 self._p2_expr(arg)
@@ -867,7 +1025,7 @@ class SemanticAnalyzer:
         # Skip top-level declarations that don't need type checking
         elif isinstance(node, (DeviceDecl, ImportDecl, CBlockNode, PinDecl,
                                ArrayDecl, StructDecl, EnumDecl, TypeAliasDecl,
-                               ExternFnDecl, PeripheralDecl)):
+                               ExternFnDecl, PeripheralDecl, WifiDecl)):
             pass
 
     def _p3_walk_body(self, body: List[Node]) -> None:
@@ -946,10 +1104,40 @@ class SemanticAnalyzer:
         if not node.body:
             self.symbols.warn(
                 node.line,
-                f"empty event handler 'on {node.pin}.{node.event}'",
+                f"empty event handler 'on {node.target}.{node.event}'",
                 W_EMPTY_BODY,
             )
+
+        # WiFi event mode-specific validation
+        target_sym = self.symbols.lookup(node.target)
+        if target_sym and target_sym.kind == SymbolKind.WIFI:
+            wifi_decl = self._wifi_decls.get(node.target)
+            if wifi_decl:
+                mode = wifi_decl.mode
+                sta_events = {'connect', 'disconnect', 'got_ip', 'scan_done'}
+                ap_events = {'client_join', 'client_leave'}
+
+                if node.event in sta_events and mode == 'ap':
+                    self.symbols.error(
+                        node.line,
+                        f"event '{node.event}' is not valid for AP mode wifi '{node.target}' "
+                        f"(valid: client_join, client_leave)",
+                    )
+                if node.event in ap_events and mode == 'sta':
+                    self.symbols.error(
+                        node.line,
+                        f"event '{node.event}' is not valid for STA mode wifi '{node.target}' "
+                        f"(valid: connect, disconnect, got_ip, scan_done)",
+                    )
+
+        # Track scan_done context
+        old_scan = self._in_scan_done
+        if node.event == 'scan_done':
+            self._in_scan_done = True
+
         self._p3_walk_body(node.body)
+
+        self._in_scan_done = old_scan
 
     def _p3_on_threshold(self, node: OnThreshold) -> None:
         if not node.body:
@@ -1377,6 +1565,43 @@ class SemanticAnalyzer:
             # Validated in Pass 2; type depends on specific member
             self._set_type(node, VOID)
             return VOID
+        # WiFi property access
+        if obj_sym and obj_sym.kind == SymbolKind.WIFI:
+            wifi_decl = self._wifi_decls.get(obj_sym.name)
+            mode = wifi_decl.mode if wifi_decl else 'sta'
+
+            # Mode-specific validation
+            if node.member in ('clients',) and mode != 'ap':
+                self.symbols.error(
+                    node.line,
+                    f"property '.{node.member}' is only valid for AP mode wifi "
+                    f"(wifi '{obj_sym.name}' is {mode.upper()})",
+                )
+                self._set_type(node, INT)
+                return INT
+            if node.member in ('ip', 'rssi') and mode != 'sta':
+                self.symbols.error(
+                    node.line,
+                    f"property '.{node.member}' is only valid for STA mode wifi "
+                    f"(wifi '{obj_sym.name}' is {mode.upper()})",
+                )
+                self._set_type(node, STR if node.member == 'ip' else INT)
+                return STR if node.member == 'ip' else INT
+
+            # Type resolution
+            _WIFI_PROP_TYPES: Dict[str, Type] = {
+                'state':     self.symbols.get_type('WifiState') or INT,
+                'connected': BOOL,
+                'ip':        STR,
+                'rssi':      INT,
+                'channel':   INT,
+                'mac':       STR,
+                'clients':   INT,
+                'ssid':      STR,
+            }
+            t = _WIFI_PROP_TYPES.get(node.member, VOID)
+            self._set_type(node, t)
+            return t
         # Fallback: pin member access (.press, .release, etc.)
         # No type needed for these — they're event identifiers
         self._set_type(node, VOID)
@@ -1442,6 +1667,27 @@ class SemanticAnalyzer:
             self._set_type(node, ft.return_type)
             return ft.return_type
 
+        # Scan result functions — only valid inside scan_done handler
+        _SCAN_RESULT_FUNCS = frozenset({
+            'scan_result_count', 'scan_result_ssid',
+            'scan_result_rssi', 'scan_result_channel',
+        })
+        if node.name in _SCAN_RESULT_FUNCS:
+            if not self._in_scan_done:
+                self.symbols.error(
+                    node.line,
+                    f"'{node.name}()' is only valid inside a 'scan_done' event handler",
+                )
+            if node.name == 'scan_result_count':
+                self._set_type(node, INT)
+                return INT
+            elif node.name in ('scan_result_ssid',):
+                self._set_type(node, STR)
+                return STR
+            elif node.name in ('scan_result_rssi', 'scan_result_channel'):
+                self._set_type(node, INT)
+                return INT
+
         # Builtin functions (print, millis, etc.)
         # print: returns VOID
         if node.name in ('print', 'println'):
@@ -1498,6 +1744,21 @@ class SemanticAnalyzer:
 
         # Peripheral methods: validated in Pass 2
         if obj_sym and obj_sym.kind == SymbolKind.PERIPHERAL:
+            self._set_type(node, VOID)
+            return VOID
+
+        # WiFi methods
+        if obj_sym and obj_sym.kind == SymbolKind.WIFI:
+            wifi_decl = self._wifi_decls.get(obj_sym.name)
+            mode = wifi_decl.mode if wifi_decl else 'sta'
+
+            if node.method == 'scan' and mode != 'sta':
+                self.symbols.error(
+                    node.line,
+                    f"method '.scan()' is only valid for STA mode wifi "
+                    f"(wifi '{obj_sym.name}' is {mode.upper()})",
+                )
+            # Both .scan() and .disconnect() return void
             self._set_type(node, VOID)
             return VOID
 
@@ -1589,6 +1850,9 @@ class SemanticAnalyzer:
         elif isinstance(node, (VoidLoop, TickBlock, LoopBlock)):
             for stmt in node.body:
                 self._p4_tag(stmt, is_global=False)
+
+        elif isinstance(node, WifiDecl):
+            pass  # WiFi declarations are always global; no body to walk
 
         elif isinstance(node, (OnEvent, OnThreshold, EveryBlock)):
             for stmt in node.body:

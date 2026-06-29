@@ -245,7 +245,169 @@ class ESP32ArduinoHAL(HALBase):
     def flash_get_size(self) -> str:
         return 'preferences.freeEntries()'
 
-    # ── WiFi ────────────────────────────────────────────────────────
+    # ── WiFi (Milestone 8 — First-Class WiFi) ────────────────────
+
+    def wifi_supported(self) -> bool:
+        return True
+
+    def wifi_max_sta_interfaces(self) -> int:
+        return 1
+
+    def wifi_max_ap_interfaces(self) -> int:
+        return 1
+
+    def wifi_get_includes(self) -> List[str]:
+        return ['#include <WiFi.h>']
+
+    def wifi_generate_init(self, decls) -> 'HALBase.WifiInitOutput':
+        """Generate all WiFi initialization code for ESP32 Arduino."""
+        from .base import HALBase
+        out = HALBase.WifiInitOutput()
+
+        if not decls:
+            return out
+
+        out.includes = ['#include <WiFi.h>']
+
+        # Shared guards
+        out.nvs_init = (
+            'static bool _iotift_wifi_initialized = false;\n'
+            'if (!_iotift_wifi_initialized) {\n'
+            '  WiFi.mode(WIFI_MODE_NULL);\n'
+            '  _iotift_wifi_initialized = true;\n'
+            '}'
+        )
+
+        has_sta = any(d.mode == 'sta' for d in decls)
+        has_ap = any(d.mode == 'ap' for d in decls)
+
+        if has_sta and has_ap:
+            mode_line = 'WiFi.mode(WIFI_AP_STA);'
+        elif has_ap:
+            mode_line = 'WiFi.mode(WIFI_AP);'
+        else:
+            mode_line = 'WiFi.mode(WIFI_STA);'
+
+        for d in decls:
+            c_name = d.c_name or f'_iotift_wifi_{d.name}'
+
+            # State variables
+            out.state_decls.append(f'static int {c_name}_state = 0; /* WIFI_STATE_IDLE */')
+            out.state_decls.append(f'static bool {c_name}_connected = false;')
+            out.state_decls.append(f'static char {c_name}_ip[16] = {{0}};')
+            out.state_decls.append(f'static int {c_name}_rssi = 0;')
+            out.state_decls.append(f'static char {c_name}_mac[18] = {{0}};')
+            out.state_decls.append(f'static int {c_name}_channel = 0;')
+            if d.mode == 'ap':
+                out.state_decls.append(f'static int {c_name}_client_count = 0;')
+            # Event pending flags
+            for ev in ['connect', 'disconnect', 'got_ip', 'scan_done',
+                        'client_join', 'client_leave']:
+                out.state_decls.append(
+                    f'static bool {c_name}_event_{ev} = false;'
+                )
+            # Retry state
+            rp = d.retry_policy or HALBase.RetryPolicy()
+            out.state_decls.append(f'static int {c_name}_retry_count = 0;')
+            out.state_decls.append(f'static unsigned long {c_name}_last_retry_ms = 0;')
+
+            # Setup code
+            if d.mode == 'sta':
+                pw = d.password if d.password else ''
+                out.setup_code.append(
+                    f'WiFi.begin("{d.ssid}", "{pw}");'
+                )
+                if d.hostname:
+                    out.setup_code.append(f'WiFi.setHostname("{d.hostname}");')
+                if d.static_ip and d.gateway and d.subnet:
+                    dns_str = d.dns if d.dns else d.gateway
+                    out.setup_code.append(
+                        f'WiFi.config(IPAddress({d.static_ip.replace(".", ",")}), '
+                        f'IPAddress({d.gateway.replace(".", ",")}), '
+                        f'IPAddress({d.subnet.replace(".", ",")}), '
+                        f'IPAddress({dns_str.replace(".", ",")}));'
+                    )
+            elif d.mode == 'ap':
+                pw = d.password if d.password else ''
+                pw_arg = f'"{pw}"' if pw else 'NULL'
+                out.setup_code.append(
+                    f'WiFi.softAP("{d.ssid}", {pw_arg}, {d.channel}, '
+                    f'{1 if d.hidden else 0}, {d.max_clients});'
+                )
+
+            # Loop dispatch
+            out.loop_code.append(
+                f'_iotift_wifi_{d.name}_dispatch();'
+            )
+
+        # Set mode once
+        out.setup_code.insert(0, mode_line)
+
+        # Scan buffer (shared)
+        out.scan_buffer_decl = (
+            'static char _iotift_wifi_scan_ssids[16][33];\n'
+            'static int _iotift_wifi_scan_rssis[16];\n'
+            'static int _iotift_wifi_scan_channels[16];\n'
+            'static int _iotift_wifi_scan_count = 0;'
+        )
+
+        return out
+
+    def wifi_generate_event_registration(self, wifi_name: str, c_prefix: str,
+                                         event: str) -> str:
+        return f'/* WiFi event {event} for {wifi_name} — dispatch via _iotift_wifi_{wifi_name}_dispatch() */'
+
+    def wifi_generate_state_update(self, wifi_name: str, c_prefix: str,
+                                    event: str) -> str:
+        """Generate state update code for the ESP32 Arduino event callback."""
+        name = wifi_name
+        if event == 'connect':
+            return (
+                f'_iotift_wifi_{name}_state = 2; /* CONNECTED */\n'
+                f'  _iotift_wifi_{name}_connected = true;\n'
+                f'  strcpy(_iotift_wifi_{name}_ip, WiFi.localIP().toString().c_str());\n'
+                f'  _iotift_wifi_{name}_rssi = WiFi.RSSI();\n'
+                f'  _iotift_wifi_{name}_event_got_ip = true;\n'
+                f'  _iotift_wifi_{name}_event_connect = true;'
+            )
+        elif event == 'disconnect':
+            return (
+                f'_iotift_wifi_{name}_state = 3; /* DISCONNECTED */\n'
+                f'  _iotift_wifi_{name}_connected = false;\n'
+                f'  _iotift_wifi_{name}_event_disconnect = true;'
+            )
+        elif event == 'scan_done':
+            return (
+                f'_iotift_wifi_{name}_event_scan_done = true;'
+            )
+        return f'/* state update {event} for {wifi_name} */'
+
+    def wifi_generate_disconnect(self, name: str, c_prefix: str) -> str:
+        return (
+            f'WiFi.disconnect(true);\n'
+            f'  _iotift_wifi_{name}_state = 3; /* DISCONNECTED */\n'
+            f'  _iotift_wifi_{name}_connected = false;'
+        )
+
+    def wifi_generate_scan_start(self, name: str, c_prefix: str) -> str:
+        return f'WiFi.scanNetworks(true); /* async scan */'
+
+    def wifi_generate_property_read(self, name: str, c_prefix: str,
+                                     prop: str) -> str:
+        """Generate C expression to read a WiFi property."""
+        _MAP = {
+            'state':     f'_iotift_wifi_{name}_state',
+            'connected': f'_iotift_wifi_{name}_connected',
+            'ip':        f'_iotift_wifi_{name}_ip',
+            'rssi':      f'_iotift_wifi_{name}_rssi',
+            'channel':   f'_iotift_wifi_{name}_channel',
+            'mac':       f'_iotift_wifi_{name}_mac',
+            'clients':   f'_iotift_wifi_{name}_client_count',
+            'ssid':      f'"{name}"',
+        }
+        return _MAP.get(prop, f'_iotift_wifi_{name}_{prop}')
+
+    # ── Legacy WiFi methods (backward compat) ────────────────────
 
     def wifi_begin(self, ssid_expr: str, password_expr: str) -> str:
         return (

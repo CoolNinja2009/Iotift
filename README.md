@@ -99,7 +99,7 @@ python iotift.py blink.iot --flash
 | **5 — Tooling** | ✅ Done | Formatter, linter, polished CLI, source maps (84 tests) |
 | **6 — LSP & Editor** | ✅ Done | LSP server, VS Code extension, diagnostics, completion, hover (77 tests) |
 | **7 — Multi-Target** | ✅ Done | 8 targets, ESP-IDF/CMSIS, production APIs, debugger, package manager (500 tests) |
-| **8 — First-Class WiFi** | 📋 Planned | Native wifi declaration syntax, event-driven WiFi, rewritten function names |
+| **8 — First-Class WiFi** | 📐 Spec Ready | Block-syntax declarations, event-driven WiFi, 4-state FSM, retry policies, 25 criteria |
 
 ---
 
@@ -645,6 +645,144 @@ float l = log(sensor_val);
 | `exp(x)` | `exp(x)` |
 
 The compiler automatically emits `#include <math.h>` when any math function is used.
+
+### WiFi  *(new in v2.1.0 / Milestone 8)*
+
+WiFi is a **first-class language feature**. The compiler generates all boilerplate:
+NVS init, TCP/IP stack, event loop, and WiFi state machine. You write only the
+logic that matters.
+
+#### Declaration
+
+```iot
+wifi home {
+    ssid: "MyWiFi";
+    password: "mypassword";
+}
+```
+
+This single block generates ~150 lines of correct C: WiFi init, STA config,
+event loop, connection, retry logic, state tracking, and event dispatch.
+
+#### All Configuration Keys
+
+| Key | Type | Default | Mode | Description |
+|-----|------|---------|------|-------------|
+| `mode` | `sta` \| `ap` | `sta` | both | Operating mode |
+| `ssid` | `str` | *(required)* | both | Network name (1–32 chars) |
+| `password` | `str` | *(none)* | both | WPA/WPA2 passphrase (omit for open) |
+| `hostname` | `str` | auto | sta | DHCP hostname |
+| `connect_timeout` | time | `30s` | sta | Per-attempt timeout |
+| `retry` | retry spec | `fixed` | sta | Retry policy |
+| `power_save` | `none` \| `light` \| `deep` | `none` | sta | Power save mode |
+| `static_ip` | `str` | DHCP | sta | Static IPv4 address |
+| `gateway` | `str` | DHCP | sta | Gateway (requires static_ip) |
+| `subnet` | `str` | DHCP | sta | Subnet mask |
+| `dns` | `str` | DHCP | sta | DNS server |
+| `channel` | `int` (1–13) | `1` | ap | WiFi channel |
+| `max_clients` | `int` (1–16) | `4` | ap | Max stations |
+| `hidden` | `bool` | `false` | ap | Hide SSID |
+
+#### Access Point Mode
+
+```iot
+wifi guest {
+    mode: ap;
+    ssid: "FreeWiFi";
+    channel: 6;
+    max_clients: 4;
+}
+```
+
+#### Dual Mode (STA + AP)
+
+Declare two separate wifi blocks — the compiler auto-merges into `WIFI_MODE_APSTA`:
+
+```iot
+wifi sta_if { ssid: "HomeWiFi"; password: "pass"; }
+wifi ap_if  { mode: ap; ssid: "IotiftAP"; password: "ap123"; }
+```
+
+#### Properties (Read-Only State)
+
+| Property | Type | Mode | Description |
+|----------|------|------|-------------|
+| `.state` | `WifiState` | both | State machine state |
+| `.connected` | `bool` | sta | True when connected with IP |
+| `.ip` | `str` | sta | Local IPv4 address |
+| `.rssi` | `int` | sta | Signal strength in dBm |
+| `.channel` | `int` | both | Current channel |
+| `.mac` | `str` | both | MAC address |
+| `.clients` | `int` | ap | Connected station count |
+| `.ssid` | `str` | both | Configured SSID |
+
+#### Methods
+
+| Method | Mode | Description |
+|--------|------|-------------|
+| `wifi.scan()` | sta | Start async WiFi scan |
+| `wifi.disconnect()` | sta | Disconnect from WiFi |
+
+There is no `.connect()` method — connection is **declaration-driven** and
+compiler-managed.
+
+#### Events
+
+```iot
+on home.connect {
+    print("Connected! IP: " + home.ip);
+}
+
+on home.disconnect {
+    print("Disconnected. State: " + home.state);
+}
+
+on home.got_ip {
+    print("Got IP: " + home.ip);
+}
+
+on home.scan_done {
+    int count = scan_result_count();
+    for int i = 0; i < count; i += 1 {
+        print(scan_result_ssid(i));
+        print(": ");
+        println(scan_result_rssi(i));
+    }
+}
+
+on ap_if.client_join {
+    print("Client joined. Total: " + ap_if.clients);
+}
+```
+
+| Event | Mode | Fires when |
+|-------|------|------------|
+| `connect` | sta | WiFi connected AND IP obtained |
+| `disconnect` | sta | WiFi disconnected (any reason) |
+| `got_ip` | sta | IP address assigned (before `connect`) |
+| `scan_done` | sta | WiFi scan completed |
+| `client_join` | ap | Station connected to AP |
+| `client_leave` | ap | Station disconnected from AP |
+
+#### Retry Policies
+
+```iot
+wifi sensor { retry: none; }         // single attempt
+wifi stable { retry: fixed; }        // 3 retries, 5s apart (default)
+wifi critical { retry: forever; }    // never stop retrying
+wifi office  { retry: exponential; } // 1s, 2s, 4s, 8s... up to 60s
+wifi custom  { retry: custom { count: 5, interval: 10s }; }
+```
+
+#### State Machine
+
+The compiler generates a 4-state FSM: **IDLE → CONNECTING → CONNECTED ⇄ DISCONNECTED**.
+All event handlers run in the scheduler task (no ISR, no FreeRTOS event loop).
+
+#### No Leakage Guarantee
+
+Programs without WiFi declarations emit **zero** WiFi-related code. No
+`#include <WiFi.h>`, no NVS init, no event loop.
 
 ### Printing
 

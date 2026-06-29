@@ -181,6 +181,7 @@ _SNIPPETS = {
     'i2c': 'i2c ${1:bus} { sda: ${2:21}, scl: ${3:22}, speed: ${4:100kHz} };',
     'spi': 'spi ${1:bus} { mosi: ${2:23}, miso: ${3:19}, sck: ${4:18}, speed: ${5:10MHz} };',
     'uart': 'uart ${1:serial} { tx: ${2:17}, rx: ${3:16}, baud: ${4:9600} };',
+    'wifi': 'wifi ${1:home} {\n    ssid: "${2:MyWiFi}",\n    password: "${3:mypassword}",\n};',
     'device': '@device ${1|esp32|}',
     'config': '@config scheduler_slots = ${1:16};',
 }
@@ -1090,6 +1091,84 @@ def _make_member_completions(source: str, info: DocumentInfo) -> list:
             'label': 'read',
             'kind': CompletionItemKind.METHOD,
             'detail': 'Read value',
+        },
+        # WiFi properties
+        {
+            'label': 'state',
+            'kind': CompletionItemKind.PROPERTY,
+            'detail': 'WiFi state machine state',
+        },
+        {
+            'label': 'connected',
+            'kind': CompletionItemKind.PROPERTY,
+            'detail': 'WiFi connection status (bool)',
+        },
+        {
+            'label': 'ip',
+            'kind': CompletionItemKind.PROPERTY,
+            'detail': 'Local IP address (str)',
+        },
+        {
+            'label': 'rssi',
+            'kind': CompletionItemKind.PROPERTY,
+            'detail': 'Signal strength in dBm (int)',
+        },
+        {
+            'label': 'channel',
+            'kind': CompletionItemKind.PROPERTY,
+            'detail': 'WiFi channel number (int)',
+        },
+        {
+            'label': 'mac',
+            'kind': CompletionItemKind.PROPERTY,
+            'detail': 'WiFi MAC address (str)',
+        },
+        {
+            'label': 'clients',
+            'kind': CompletionItemKind.PROPERTY,
+            'detail': 'Connected station count (AP mode)',
+        },
+        {
+            'label': 'ssid',
+            'kind': CompletionItemKind.PROPERTY,
+            'detail': 'Configured SSID (str)',
+        },
+        # WiFi methods
+        {
+            'label': 'scan',
+            'kind': CompletionItemKind.METHOD,
+            'detail': 'Start WiFi scan (STA only)',
+        },
+        {
+            'label': 'disconnect',
+            'kind': CompletionItemKind.METHOD,
+            'detail': 'Disconnect from WiFi',
+        },
+        # WiFi events (LSP kind 24 = Event)
+        {
+            'label': 'connect',
+            'kind': 24,
+            'detail': 'WiFi connected + IP obtained (STA)',
+        },
+        {
+            'label': 'got_ip',
+            'kind': 24,
+            'detail': 'IP address assigned (STA)',
+        },
+        {
+            'label': 'scan_done',
+            'kind': 24,
+            'detail': 'WiFi scan completed (STA)',
+        },
+        {
+            'label': 'client_join',
+            'kind': 24,
+            'detail': 'Station connected to AP',
+        },
+        {
+            'label': 'client_leave',
+            'kind': 24,
+            'detail': 'Station disconnected from AP',
         },
     ])
     return items

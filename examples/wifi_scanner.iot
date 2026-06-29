@@ -1,0 +1,49 @@
+/**
+ * wifi_scanner.iot — WiFi network scanner
+ *
+ * Demonstrates:
+ *  - WiFi STA with scan
+ *  - Scan result accessor functions
+ *  - Periodic scanning via timer
+ *
+ * Compile:  iotift build examples/wifi_scanner.iot
+ */
+
+@device esp32
+
+// ── WiFi ─────────────────────────────────────────
+wifi scanner {
+    ssid: "DummySSID";
+    password: "DummyPassword";
+    retry: none;
+};
+
+// ── Periodic scan ─────────────────────────────────
+every 10s as scan_timer {
+    if scanner.connected {
+        scanner.scan();
+    }
+}
+
+// ── WiFi Events ──────────────────────────────────
+
+on scanner.connect {
+    println("WiFi connected. Starting scans...");
+    scanner.scan();
+}
+
+on scanner.scan_done {
+    int count = scan_result_count();
+    println("Networks found: " + count);
+    for int i = 0; i < count; i += 1 {
+        print("  ");
+        print(scan_result_ssid(i));
+        print(" [");
+        print(scan_result_rssi(i));
+        println(" dBm]");
+    }
+}
+
+on scanner.disconnect {
+    println("WiFi disconnected.");
+}

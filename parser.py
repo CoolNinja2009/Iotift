@@ -118,7 +118,7 @@ class Parser:
             # Top-level keywords are safe restart points (don't consume)
             if tok.type == TT.KEYWORD and tok.value in (
                 'pin', 'fn', 'struct', 'enum', 'const', 'let', 'var',
-                'extern', 'on', 'every', 'loop', 'tick', 'import',
+                'extern', 'on', 'every', 'loop', 'tick', 'import', 'wifi',
             ):
                 return
             if tok.type in (TT.TYPE_KW, TT.AT):
@@ -193,6 +193,8 @@ class Parser:
             return self._parse_c_block()
         if tok.type == TT.KEYWORD and tok.value in ('i2c', 'spi', 'uart'):
             return self._parse_peripheral()
+        if tok.type == TT.KEYWORD and tok.value == 'wifi':
+            return self._parse_wifi_decl()
 
         # Bare statements at top level (assign, print, call, etc.)
         return self._parse_statement()
@@ -487,20 +489,25 @@ class Parser:
     def _parse_on(self) -> Union[OnEvent, OnThreshold]:
         line = self._peek().line
         self._expect(TT.KEYWORD, 'on')
-        pin = self._expect(TT.IDENT).value
+        target = self._expect(TT.IDENT).value
 
         # ── on TEMP > 50.0 { ... }   (threshold style) ──
         if self._check(TT.OP):
             op = self._advance().value
             value = self._parse_primary()
             body = self._parse_block()
-            return OnThreshold(line=line, pin=pin, op=op, value=value, body=body)
+            return OnThreshold(line=line, pin=target, op=op, value=value, body=body)
 
-        # ── on BTN.press { ... }   (event style) ──
+        # ── on BTN.press { ... }   /   on home.connect { ... }  (event style) ──
         self._expect(TT.DOT)
-        event = self._expect(TT.IDENT if self._peek().type == TT.IDENT else TT.KEYWORD).value
+        # Event name: can be IDENT or KEYWORD (contextual keywords like connect, press, etc.)
+        event_tok = self._peek()
+        if event_tok.type in (TT.IDENT, TT.KEYWORD):
+            event = self._advance().value
+        else:
+            event = self._expect(TT.IDENT).value
         body = self._parse_block()
-        return OnEvent(line=line, pin=pin, event=event, body=body)
+        return OnEvent(line=line, target=target, event=event, body=body)
 
     def _parse_every(self) -> EveryBlock:
         line = self._peek().line
@@ -552,6 +559,167 @@ class Parser:
             self._expect(TT.RBRACE)
         self._expect_semi()
         return PeripheralDecl(line=line, periph_type=periph_type, name=name, config=config)
+
+    # ─────────────────────────────────────────
+    #  WIFI DECLARATION
+    # ─────────────────────────────────────────
+
+    def _parse_wifi_decl(self) -> 'WifiDecl':
+        """wifi NAME { key: value, key: value, ... }"""
+        line = self._peek().line
+        self._expect(TT.KEYWORD, 'wifi')
+        name = self._expect(TT.IDENT).value
+
+        config: dict = {}
+        mode = 'sta'  # default
+
+        if self._check(TT.LBRACE):
+            config, mode = self._parse_wifi_options()
+
+        return WifiDecl(line=line, name=name, mode=mode, config=config)
+
+    def _parse_wifi_options(self) -> Tuple[dict, str]:
+        """Parse key: value pairs inside wifi block. Returns (config_dict, mode)."""
+        config: dict = {}
+        mode: str = 'sta'
+
+        self._expect(TT.LBRACE)
+        while not self._check(TT.RBRACE) and not self._at_end():
+            # Key can be IDENT or KEYWORD (contextual keywords like ssid, mode, etc.)
+            key_tok = self._peek()
+            if key_tok.type not in (TT.IDENT, TT.KEYWORD):
+                break
+            key = self._advance().value
+            self._expect(TT.COLON)
+
+            if key == 'mode':
+                val_tok = self._peek()
+                if val_tok.type in (TT.IDENT, TT.KEYWORD):
+                    val = self._advance().value
+                    if val in ('sta', 'ap'):
+                        mode = val
+                        config['mode'] = val
+                    else:
+                        self._error(
+                            f"Line {val_tok.line}: expected 'sta' or 'ap' for wifi mode, got '{val}'"
+                        )
+                else:
+                    self._expect(TT.IDENT)  # trigger error
+
+            elif key == 'retry':
+                retry_config = self._parse_retry_spec()
+                config['retry'] = retry_config
+
+            elif key in ('connect_timeout',):
+                val = self._expect(TT.INT_LIT).value
+                config[key] = val
+
+            elif key in ('channel', 'max_clients'):
+                val = self._expect(TT.INT_LIT).value
+                config[key] = val
+
+            elif key == 'hidden':
+                val_tok = self._peek()
+                if val_tok.type == TT.BOOL_LIT:
+                    config[key] = self._advance().value
+                elif val_tok.type == TT.IDENT and val_tok.value in ('true', 'false'):
+                    config[key] = self._advance().value == 'true'
+                elif val_tok.type == TT.KEYWORD and val_tok.value in ('true', 'false'):
+                    config[key] = self._advance().value == 'true'
+                else:
+                    config[key] = self._expect(TT.BOOL_LIT).value
+
+            elif key == 'power_save':
+                val_tok = self._peek()
+                if val_tok.type in (TT.IDENT, TT.KEYWORD):
+                    val = self._advance().value
+                    if val in ('none', 'light', 'deep'):
+                        config[key] = val
+                    else:
+                        self._error(
+                            f"Line {val_tok.line}: expected 'none', 'light', or 'deep' "
+                            f"for power_save, got '{val}'"
+                        )
+                else:
+                    self._expect(TT.IDENT)
+
+            else:
+                # Generic key: value parsing for ssid, password, hostname,
+                # static_ip, gateway, subnet, dns, etc.
+                val_tok = self._peek()
+                if val_tok.type == TT.STR_LIT:
+                    config[key] = self._advance().value
+                elif val_tok.type == TT.INT_LIT:
+                    config[key] = self._advance().value
+                elif val_tok.type in (TT.IDENT, TT.KEYWORD):
+                    config[key] = self._advance().value
+                else:
+                    self._advance()  # skip unknown
+
+            if not self._match(TT.COMMA):
+                break
+
+        self._expect(TT.RBRACE)
+        return config, mode
+
+    def _parse_retry_spec(self) -> dict:
+        """
+        Parse retry: none | fixed | forever | exponential | custom { ... }
+        Returns a dict describing the retry policy.
+        """
+        tok = self._peek()
+        if tok.type not in (TT.IDENT, TT.KEYWORD):
+            self._expect(TT.IDENT)  # trigger error
+            return {'kind': 'fixed'}
+
+        kind = self._advance().value
+
+        if kind in ('none', 'fixed', 'forever', 'exponential'):
+            return {'kind': kind}
+
+        if kind == 'custom':
+            retry_config: dict = {'kind': 'custom', 'count': 3, 'interval_ms': 5000,
+                                 'max_interval_ms': 60000, 'backoff': 'fixed'}
+            if self._check(TT.LBRACE):
+                self._advance()
+                while not self._check(TT.RBRACE) and not self._at_end():
+                    key_tok = self._peek()
+                    if key_tok.type not in (TT.IDENT, TT.KEYWORD):
+                        break
+                    key = self._advance().value
+                    self._expect(TT.COLON)
+
+                    if key in ('count',):
+                        retry_config['count'] = self._expect(TT.INT_LIT).value
+                    elif key in ('interval',):
+                        retry_config['interval_ms'] = self._expect(TT.INT_LIT).value
+                    elif key in ('max_interval',):
+                        retry_config['max_interval_ms'] = self._expect(TT.INT_LIT).value
+                    elif key == 'backoff':
+                        val_tok = self._peek()
+                        if val_tok.type in (TT.IDENT, TT.KEYWORD):
+                            val = self._advance().value
+                            if val in ('fixed', 'exponential'):
+                                retry_config['backoff'] = val
+                        else:
+                            self._expect(TT.IDENT)
+                    else:
+                        if self._peek().type in (TT.IDENT, TT.KEYWORD, TT.INT_LIT, TT.STR_LIT):
+                            self._advance()
+                        else:
+                            self._advance()
+
+                    if not self._match(TT.COMMA):
+                        break
+                self._expect(TT.RBRACE)
+            return retry_config
+
+        # Unknown retry kind — error recovery
+        self._error(
+            f"Line {tok.line}: expected retry policy (none, fixed, forever, exponential, custom), "
+            f"got '{kind}'"
+        )
+        return {'kind': 'fixed'}
 
     # ─────────────────────────────────────────
     #  BLOCKS & STATEMENTS

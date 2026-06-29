@@ -8,7 +8,8 @@ C strings, making the compiler multi-target by construction.
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict
 
 
 class HALBase(ABC):
@@ -270,14 +271,115 @@ class HALBase(ABC):
         """Return total flash/EEPROM size in bytes as a C expression."""
         return '0 /* flash size unknown */'
 
-    # ── WiFi ────────────────────────────────────────────────────────
+    # ── WiFi (Milestone 8 — First-Class WiFi) ─────────────────────
+
+    # ── WiFi structured data types ──
+
+    @dataclass
+    class RetryPolicy:
+        """WiFi retry policy configuration."""
+        kind: str = 'fixed'          # 'none' | 'fixed' | 'forever' | 'exponential' | 'custom'
+        count: int = 3               # max attempts (0 = forever)
+        interval_ms: int = 5000      # base interval in ms
+        max_interval_ms: int = 60000 # cap for exponential backoff
+        backoff: str = 'fixed'       # 'fixed' | 'exponential'
+
+    @dataclass
+    class WifiInitContext:
+        """Per-declaration context passed to HAL for code generation."""
+        name: str = ''               # user-given name (e.g., 'home')
+        c_name: str = ''             # generated C prefix (e.g., '_iotift_wifi_home')
+        mode: str = 'sta'            # 'sta' | 'ap'
+        ssid: str = ''
+        password: Optional[str] = None  # None = open network
+        hostname: str = ''
+        connect_timeout_ms: int = 30000
+        retry_policy: Optional['HALBase.RetryPolicy'] = None
+        power_save: str = 'none'     # 'none' | 'light' | 'deep'
+        static_ip: Optional[str] = None
+        gateway: Optional[str] = None
+        subnet: Optional[str] = None
+        dns: Optional[str] = None
+        channel: int = 1
+        max_clients: int = 4
+        hidden: bool = False
+
+    @dataclass
+    class WifiInitOutput:
+        """Structured output from HAL WiFi init generation."""
+        includes: List[str] = field(default_factory=list)
+        nvs_init: str = ''
+        netif_init: str = ''
+        event_loop_init: str = ''
+        state_decls: List[str] = field(default_factory=list)
+        global_code: List[str] = field(default_factory=list)
+        setup_code: List[str] = field(default_factory=list)
+        loop_code: List[str] = field(default_factory=list)
+        cleanup_code: List[str] = field(default_factory=list)
+        scan_buffer_decl: str = ''
+
+    @dataclass
+    class EventContext:
+        """Context for a single WiFi event handler."""
+        wifi_name: str = ''
+        c_prefix: str = ''
+        event: str = ''
+        handler_body: str = ''
+        handler_func_name: str = ''
+
+    # ── WiFi HAL methods ──
+
+    def wifi_supported(self) -> bool:
+        """Return True if this target supports WiFi. Default: False."""
+        return False
+
+    def wifi_max_sta_interfaces(self) -> int:
+        """Maximum simultaneous STA interfaces."""
+        return 0
+
+    def wifi_max_ap_interfaces(self) -> int:
+        """Maximum simultaneous AP interfaces."""
+        return 0
+
+    def wifi_get_includes(self) -> List[str]:
+        """Return #include lines for WiFi support. Empty on unsupported targets."""
+        return []
+
+    def wifi_generate_init(self, decls: List['HALBase.WifiInitContext']) -> 'HALBase.WifiInitOutput':
+        """Generate all WiFi initialization code from declaration contexts."""
+        return HALBase.WifiInitOutput()
+
+    def wifi_generate_event_registration(self, wifi_name: str, c_prefix: str,
+                                         event: str) -> str:
+        """Generate event handler registration for a specific event."""
+        return f'/* WiFi event {event} for {wifi_name} — not implemented */'
+
+    def wifi_generate_state_update(self, wifi_name: str, c_prefix: str,
+                                    event: str) -> str:
+        """Generate C code to update state variables for an event."""
+        return f'/* WiFi state update {event} for {wifi_name} */'
+
+    def wifi_generate_disconnect(self, name: str, c_prefix: str) -> str:
+        """Generate disconnect code."""
+        return f'/* wifi_disconnect({name}) — not implemented */'
+
+    def wifi_generate_scan_start(self, name: str, c_prefix: str) -> str:
+        """Generate scan start code."""
+        return f'/* wifi_scan({name}) — not implemented */'
+
+    def wifi_generate_property_read(self, name: str, c_prefix: str,
+                                     prop: str) -> str:
+        """Generate C expression to read a WiFi property."""
+        return f'/* wifi.{prop} — not implemented */'
+
+    # ── Legacy WiFi methods (backward compat with M7) ──
 
     def wifi_begin(self, ssid_expr: str, password_expr: str) -> str:
-        """Connect to a WiFi network."""
+        """Connect to a WiFi network. (Legacy — prefer wifi_generate_init.)"""
         return f'/* wifi_begin({ssid_expr}, ***) — not implemented for {self.target_name} */'
 
     def wifi_status(self) -> str:
-        """Return WiFi connection status as a C expression (0 = disconnected, 1 = connected)."""
+        """Return WiFi connection status as a C expression."""
         return '0 /* wifi status not implemented */'
 
     def wifi_local_ip(self) -> str:

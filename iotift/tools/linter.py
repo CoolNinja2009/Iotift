@@ -32,7 +32,7 @@ from ast_nodes import (
     CastExpr, SizeOfExpr, ExprStmt, BreakStmt, ContinueStmt, StopStmt,
     DeferStmt, PwmSetup, PwmWrite, CBlockNode, StructDecl, EnumDecl,
     TypeAliasDecl, ImportDecl, DeviceDecl, SchedulerConfig,
-    PeripheralDecl, ArrayDecl,
+    PeripheralDecl, ArrayDecl, WifiDecl,
 )
 
 
@@ -79,6 +79,9 @@ class Linter:
         self._fn_calls: Set[str] = set()        # function names that are called
         self._fn_decls: Dict[str, FnDecl] = {}  # function name -> declaration
         self._all_defs: Set[str] = set()        # all defined names
+        self._wifi_decls: List[WifiDecl] = []    # WiFi declarations
+        self._wifi_event_handlers: Dict[str, Set[str]] = {}  # wifi_name → set of events
+        self._in_wifi_handler: bool = False      # inside a WiFi event handler
 
         self._node_stack: List[Node] = []       # for context tracking
 
@@ -252,8 +255,19 @@ class Linter:
     def _walk_OnEvent(self, node: OnEvent) -> None:
         was_timer = self._in_timer
         self._in_timer = True
+
+        # Track WiFi event handlers for lint rules
+        if node.event in ('connect', 'disconnect', 'got_ip', 'scan_done',
+                           'client_join', 'client_leave'):
+            if node.target not in self._wifi_event_handlers:
+                self._wifi_event_handlers[node.target] = set()
+            self._wifi_event_handlers[node.target].add(node.event)
+            self._in_wifi_handler = True
+
         for stmt in node.body:
             self._walk(stmt)
+
+        self._in_wifi_handler = False
         self._in_timer = was_timer
 
     def _walk_OnThreshold(self, node: OnThreshold) -> None:
@@ -305,6 +319,14 @@ class Linter:
 
     def _walk_FnCall(self, node: FnCall) -> None:
         self._fn_calls.add(node.name)
+        # WiFi blocking check
+        if self._in_wifi_handler and node.name in ('delay', 'delayMicroseconds'):
+            self.diagnostics.append(LintDiagnostic(
+                severity=LintSeverity.WARNING,
+                rule='wifi-blocking-in-handler',
+                message=f'Blocking call "{node.name}()" inside WiFi event handler',
+                line=node.line, col=node.col,
+            ))
         for arg in node.args:
             if isinstance(arg, Node):
                 self._walk(arg)
@@ -340,6 +362,10 @@ class Linter:
         # R7: volatile-needed — warning
         if self._in_isr:
             self._check_volatile_needed(node)
+
+        # WiFi rules
+        if isinstance(node, WifiDecl):
+            self._check_wifi_rules(node)
 
     def _check_no_float_in_isr(self, node: Node) -> None:
         """ISR should not use floating-point (saves/restores FPU context on ESP32)."""
@@ -429,6 +455,76 @@ class Linter:
                 self._warn(node, 'volatile-needed',
                            f'Assignment to "{target_name}" in ISR but not declared volatile',
                            severity=LintSeverity.WARNING)
+
+    # ── WiFi Lint Rules (Milestone 8) ──────────────────────
+
+    def _walk_WifiDecl(self, node: WifiDecl) -> None:
+        """Collect WiFi declarations for post-walk analysis."""
+        self._wifi_decls.append(node)
+        self._wifi_event_handlers[node.name] = set()
+
+    def _check_wifi_rules(self, node: WifiDecl) -> None:
+        """Run WiFi-specific lint rules on a WifiDecl node."""
+        cfg = node.config
+
+        # wifi-no-password: STA without password
+        if node.mode == 'sta' and 'password' not in cfg:
+            self.diagnostics.append(LintDiagnostic(
+                severity=LintSeverity.WARNING,
+                rule='wifi-no-password',
+                message=f'WiFi STA "{node.name}" declared without password (open network)',
+                line=node.line, col=node.col,
+            ))
+
+        # wifi-short-password: password < 8 chars
+        if 'password' in cfg:
+            pw = cfg['password']
+            if isinstance(pw, str) and len(pw) < 8:
+                self.diagnostics.append(LintDiagnostic(
+                    severity=LintSeverity.WARNING,
+                    rule='wifi-short-password',
+                    message=f'WiFi "{node.name}" password is less than 8 characters (WPA2 minimum)',
+                    line=node.line, col=node.col,
+                ))
+
+        # wifi-open-ap: AP without password
+        if node.mode == 'ap' and 'password' not in cfg:
+            self.diagnostics.append(LintDiagnostic(
+                severity=LintSeverity.INFO,
+                rule='wifi-open-ap',
+                message=f'WiFi AP "{node.name}" declared without password (open network)',
+                line=node.line, col=node.col,
+            ))
+
+        # wifi-static-ip-no-dns: static IP without DNS
+        if 'static_ip' in cfg and 'dns' not in cfg:
+            self.diagnostics.append(LintDiagnostic(
+                severity=LintSeverity.INFO,
+                rule='wifi-static-ip-no-dns',
+                message=f'WiFi "{node.name}" has static IP without DNS server specified',
+                line=node.line, col=node.col,
+            ))
+
+        # wifi-no-connect-handler: STA without connect handler
+        handlers = self._wifi_event_handlers.get(node.name, set())
+        if node.mode == 'sta' and 'connect' not in handlers:
+            self.diagnostics.append(LintDiagnostic(
+                severity=LintSeverity.INFO,
+                rule='wifi-no-connect-handler',
+                message=f'WiFi STA "{node.name}" has no "on {node.name}.connect" handler',
+                line=node.line, col=node.col,
+            ))
+
+        # wifi-unused: WiFi declared but no event handlers at all
+        if not handlers:
+            self.diagnostics.append(LintDiagnostic(
+                severity=LintSeverity.WARNING,
+                rule='wifi-unused',
+                message=f'WiFi "{node.name}" declared but has no event handlers defined',
+                line=node.line, col=node.col,
+            ))
+
+    # ── Post-walk: check for unused
 
     def _check_unused(self) -> None:
         """Post-walk: check for unused variables and functions."""

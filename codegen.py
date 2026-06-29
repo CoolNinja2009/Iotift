@@ -10,7 +10,7 @@ from ast_nodes import *
 from typing import List, Any, Optional
 import re
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 
 class CodeGenError(Exception):
@@ -103,6 +103,11 @@ class CodeGen:
         self._uses_math: bool = False
         self._enums: dict[str, EnumDecl] = {}
 
+        # ── WiFi state (Milestone 8) ──
+        self._wifi_decls: list[WifiDecl] = []
+        self._wifi_event_handlers: list[tuple] = []  # (wifi_name, event, body_lines)
+        self._has_wifi: bool = False
+
     # ─────────────────────────────────────────
     #  PUBLIC ENTRY
     # ─────────────────────────────────────────
@@ -117,9 +122,11 @@ class CodeGen:
         self._emit_config_defines()
         self._emit_pin_macros()
         self._emit_enums()
+        self._emit_wifi_global_state()
         self._emit_global_blocks()
         self._emit_global_state()
         self._emit_scheduler()
+        self._emit_wifi_handlers()
         self._emit_user_fns()
         self._emit_handler_fns()
         self._emit_setup()
@@ -196,6 +203,9 @@ class CodeGen:
                 'loop':   self._loop_blocks,
             }.get(node.scope, self._global_blocks)
             target.append(node.code)
+
+        elif isinstance(node, WifiDecl):
+            self._collect_wifi_decl(node)
 
         elif isinstance(node, OnEvent):
             self._collect_on_event(node)
@@ -277,7 +287,14 @@ class CodeGen:
         )
 
     def _collect_on_event(self, node: OnEvent) -> None:
-        self._on_pins.add(node.pin)
+        # WiFi events: collect for later emission
+        if node.event in ('connect', 'disconnect', 'got_ip', 'scan_done',
+                          'client_join', 'client_leave'):
+            self._wifi_event_handlers.append((node.target, node.event, node.body))
+            return
+
+        # Pin events
+        self._on_pins.add(node.target)
         if self._needs_scheduler(node.body):
             self._scheduler_needed = True
 
@@ -285,8 +302,8 @@ class CodeGen:
         if not node.body:
             return
 
-        fn_name = f"_iotift_on_{node.pin}_{node.event}"
-        last_var = f"_iotift_last_{node.pin}_state"
+        fn_name = f"_iotift_on_{node.target}_{node.event}"
+        last_var = f"_iotift_last_{node.target}_state"
         if last_var not in self._declared_vars:
             self._declared_vars.add(last_var)
             self._global_state.append(f"static int {last_var} = HIGH;")
@@ -299,7 +316,7 @@ class CodeGen:
         }.get(node.event, f"_state != {last_var}")
 
         body: List[str] = [
-            f"  int _state = digitalRead({node.pin}_PIN);",
+            f"  int _state = digitalRead({node.target}_PIN);",
             f"  if ({cond}) {{",
         ]
         for s in node.body:
@@ -311,6 +328,11 @@ class CodeGen:
             'static void', fn_name, '', body,
         ))
         self._loop_calls.append(f"{fn_name}();")
+
+    def _collect_wifi_decl(self, node: WifiDecl) -> None:
+        """Collect a wifi declaration for later emission."""
+        self._wifi_decls.append(node)
+        self._has_wifi = True
 
     def _collect_on_threshold(self, node: OnThreshold) -> None:
         if not node.body:
@@ -580,6 +602,215 @@ class CodeGen:
             '',
         ]
         self._loop_calls.append('_iotift_scheduler_tick();')
+
+    def _emit_wifi_global_state(self) -> None:
+        """Emit WiFi state variables, guards, and WifiState enum."""
+        if not self._has_wifi:
+            return
+
+        self._section('WIFI STATE')
+
+        # WifiState enum
+        self._lines += [
+            'typedef enum {',
+            '  WIFI_STATE_IDLE = 0,',
+            '  WIFI_STATE_CONNECTING,',
+            '  WIFI_STATE_CONNECTED,',
+            '  WIFI_STATE_DISCONNECTED,',
+            '} wifi_state_t;',
+            '',
+        ]
+
+        # Shared guards
+        self._lines += [
+            'static bool _iotift_wifi_system_initialized = false;',
+            '',
+        ]
+
+        # Per-declaration state variables
+        for wd in self._wifi_decls:
+            name = wd.name
+            self._lines += [
+                f'static wifi_state_t _iotift_wifi_{name}_state = WIFI_STATE_IDLE;',
+                f'static bool _iotift_wifi_{name}_connected = false;',
+                f'static char _iotift_wifi_{name}_ip[16] = {{0}};',
+                f'static int _iotift_wifi_{name}_rssi = 0;',
+                f'static char _iotift_wifi_{name}_mac[18] = {{0}};',
+                f'static int _iotift_wifi_{name}_channel = 0;',
+            ]
+            if wd.mode == 'ap':
+                self._lines.append(
+                    f'static int _iotift_wifi_{name}_client_count = 0;'
+                )
+
+            # Event pending flags
+            for ev in ['connect', 'disconnect', 'got_ip', 'scan_done',
+                        'client_join', 'client_leave']:
+                self._lines.append(
+                    f'static bool _iotift_wifi_{name}_event_{ev} = false;'
+                )
+
+            # Retry state
+            retry_cfg = wd.config.get('retry', {'kind': 'fixed'})
+            self._lines += [
+                f'static int _iotift_wifi_{name}_retry_count = 0;',
+                f'static unsigned long _iotift_wifi_{name}_last_retry_ms = 0;',
+            ]
+
+        # Scan buffer (shared)
+        self._lines += [
+            '',
+            'static char _iotift_wifi_scan_ssids[16][33];',
+            'static int _iotift_wifi_scan_rssis[16];',
+            'static int _iotift_wifi_scan_channels[16];',
+            'static int _iotift_wifi_scan_count = 0;',
+            '',
+        ]
+
+    def _emit_wifi_handlers(self) -> None:
+        """Emit WiFi event handlers and dispatch functions."""
+        if not self._has_wifi:
+            return
+
+        # WiFi event handler functions (one per on <wifi>.<event>)
+        for wifi_name, event, body in self._wifi_event_handlers:
+            if not body:
+                continue
+            fn_name = f'_iotift_wifi_{wifi_name}_on_{event}'
+            body_lines = [
+                ln for s in body for ln in self._stmt_lines(s, '  ')
+            ]
+            self._handler_fns.append(self._make_fn(
+                'static void', fn_name, '', body_lines,
+            ))
+
+        # Event dispatch functions (one per wifi declaration)
+        for wd in self._wifi_decls:
+            name = wd.name
+            dispatch_lines: List[str] = []
+            dispatch_lines.append(f'  /* Dispatch events for wifi {name} */')
+            for ev in ['connect', 'disconnect', 'got_ip', 'scan_done',
+                        'client_join', 'client_leave']:
+                # Check if there's a user handler for this event
+                has_handler = any(
+                    h[0] == name and h[1] == ev and h[2]
+                    for h in self._wifi_event_handlers
+                )
+                if has_handler:
+                    dispatch_lines.append(
+                        f'  if (_iotift_wifi_{name}_event_{ev}) {{'
+                    )
+                    dispatch_lines.append(
+                        f'    _iotift_wifi_{name}_on_{ev}();'
+                    )
+                    dispatch_lines.append(
+                        f'    _iotift_wifi_{name}_event_{ev} = false;'
+                    )
+                    dispatch_lines.append(f'  }}')
+
+            self._handler_fns.append(self._make_fn(
+                'static void', f'_iotift_wifi_{name}_dispatch', '',
+                dispatch_lines,
+            ))
+            self._loop_calls.append(f'_iotift_wifi_{name}_dispatch();')
+
+        # Scan result accessor functions
+        self._handler_fns.append(self._make_fn(
+            'static int', '_iotift_wifi_scan_result_count', '',
+            ['  return _iotift_wifi_scan_count;'],
+        ))
+        self._handler_fns.append(self._make_fn(
+            'static const char*', '_iotift_wifi_scan_result_ssid',
+            'int i', [
+                '  if (i < 0 || i >= _iotift_wifi_scan_count) return "";',
+                '  return _iotift_wifi_scan_ssids[i];',
+            ],
+        ))
+        self._handler_fns.append(self._make_fn(
+            'static int', '_iotift_wifi_scan_result_rssi',
+            'int i', [
+                '  if (i < 0 || i >= _iotift_wifi_scan_count) return 0;',
+                '  return _iotift_wifi_scan_rssis[i];',
+            ],
+        ))
+        self._handler_fns.append(self._make_fn(
+            'static int', '_iotift_wifi_scan_result_channel',
+            'int i', [
+                '  if (i < 0 || i >= _iotift_wifi_scan_count) return 0;',
+                '  return _iotift_wifi_scan_channels[i];',
+            ],
+        ))
+
+        # Scan start and disconnect functions for each STA wifi
+        for wd in self._wifi_decls:
+            name = wd.name
+            if wd.mode == 'sta':
+                self._handler_fns.append(self._make_fn(
+                    'static void', f'_iotift_wifi_{name}_scan_start', '',
+                    [
+                        '  WiFi.scanNetworks(true); /* async scan */',
+                    ],
+                ))
+            self._handler_fns.append(self._make_fn(
+                'static void', f'_iotift_wifi_{name}_disconnect', '',
+                [
+                    f'  WiFi.disconnect(true);',
+                    f'  _iotift_wifi_{name}_state = WIFI_STATE_DISCONNECTED;',
+                    f'  _iotift_wifi_{name}_connected = false;',
+                ],
+            ))
+
+        # System init function
+        init_lines: List[str] = [
+            '  if (!_iotift_wifi_system_initialized) {',
+            '    WiFi.mode(WIFI_MODE_NULL);',
+        ]
+        # Determine mode
+        has_sta = any(d.mode == 'sta' for d in self._wifi_decls)
+        has_ap = any(d.mode == 'ap' for d in self._wifi_decls)
+        if has_sta and has_ap:
+            init_lines.append('    WiFi.mode(WIFI_AP_STA);')
+        elif has_ap:
+            init_lines.append('    WiFi.mode(WIFI_AP);')
+        else:
+            init_lines.append('    WiFi.mode(WIFI_STA);')
+
+        for wd in self._wifi_decls:
+            name = wd.name
+            cfg = wd.config
+            if wd.mode == 'sta':
+                pw = cfg.get('password', '')
+                init_lines.append(f'    WiFi.begin("{cfg.get("ssid", "")}", "{pw}");')
+                if cfg.get('hostname'):
+                    init_lines.append(f'    WiFi.setHostname("{cfg["hostname"]}");')
+                if cfg.get('static_ip') and cfg.get('gateway') and cfg.get('subnet'):
+                    dns = cfg.get('dns', cfg['gateway'])
+                    init_lines.append(
+                        f'    WiFi.config(IPAddress({cfg["static_ip"].replace(".", ",")}), '
+                        f'IPAddress({cfg["gateway"].replace(".", ",")}), '
+                        f'IPAddress({cfg["subnet"].replace(".", ",")}), '
+                        f'IPAddress({dns.replace(".", ",")}));'
+                    )
+            elif wd.mode == 'ap':
+                pw = cfg.get('password', '')
+                pw_arg = f'"{pw}"' if pw else 'NULL'
+                ch = cfg.get('channel', 1)
+                hidden = 1 if cfg.get('hidden', False) else 0
+                mc = cfg.get('max_clients', 4)
+                init_lines.append(
+                    f'    WiFi.softAP("{cfg.get("ssid", "")}", {pw_arg}, '
+                    f'{ch}, {hidden}, {mc});'
+                )
+
+        init_lines.append('    _iotift_wifi_system_initialized = true;')
+        init_lines.append('  }')
+
+        self._handler_fns.append(self._make_fn(
+            'static void', '_iotift_wifi_system_init', '',
+            init_lines,
+        ))
+        # Auto-insert into setup
+        self._setup_lines.insert(0, '_iotift_wifi_system_init();')
 
     def _emit_user_fns(self) -> None:
         if not self._user_fns:
@@ -914,9 +1145,36 @@ class CodeGen:
             return result
 
         if isinstance(node, MemberAccess):
+            # WiFi property access: home.connected → _iotift_wifi_home_connected
+            if isinstance(node.obj, str) and node.obj in [d.name for d in self._wifi_decls]:
+                wifi_prop_map = {
+                    'state':     f'_iotift_wifi_{node.obj}_state',
+                    'connected': f'_iotift_wifi_{node.obj}_connected',
+                    'ip':        f'_iotift_wifi_{node.obj}_ip',
+                    'rssi':      f'_iotift_wifi_{node.obj}_rssi',
+                    'channel':   f'_iotift_wifi_{node.obj}_channel',
+                    'mac':       f'_iotift_wifi_{node.obj}_mac',
+                    'clients':   f'_iotift_wifi_{node.obj}_client_count',
+                    'ssid':      '"{0}"'.format(
+                        next((d.config.get('ssid', '') for d in self._wifi_decls
+                              if d.name == node.obj), '')
+                    ),
+                }
+                if node.member in wifi_prop_map:
+                    return wifi_prop_map[node.member]
             obj = self._expr_c(node.obj)
-            result = f'{obj}.{node.member}'
-            return result
+            return f'{obj}.{node.member}'
+
+        if isinstance(node, MethodCall):
+            # WiFi method calls
+            if isinstance(node.obj, str) and node.obj in [d.name for d in self._wifi_decls]:
+                if node.method == 'scan':
+                    return f'_iotift_wifi_{node.obj}_scan_start()'
+                elif node.method == 'disconnect':
+                    return f'_iotift_wifi_{node.obj}_disconnect()'
+            args = ', '.join(self._expr_c(a) for a in node.args)
+            obj = self._expr_c(node.obj)
+            return f'{obj}.{node.method}({args})'
 
         if isinstance(node, ArrayAccess):
             result = f'{node.name}[{self._expr_c(node.index)}]'
