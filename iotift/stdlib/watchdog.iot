@@ -1,0 +1,5 @@
+// watchdog.iot — Hardware Watchdog Timer API
+// Prevents the system from hanging by resetting if not fed.
+
+extern fn watchdogEnable(int timeout_ms);
+extern fn watchdogReset();

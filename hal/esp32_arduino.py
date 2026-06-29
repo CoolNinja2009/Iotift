@@ -145,6 +145,187 @@ class ESP32ArduinoHAL(HALBase):
     def isr_attribute(self) -> str:
         return 'IRAM_ATTR '
 
+    # ── Power Management ─────────────────────────────────────────
+
+    def deep_sleep(self, duration_us_expr: str) -> str:
+        if duration_us_expr == '0':
+            return 'esp_deep_sleep_start();'
+        return f'esp_sleep_enable_timer_wakeup((uint64_t)({duration_us_expr}));\n  esp_deep_sleep_start();'
+
+    def light_sleep(self, duration_us_expr: str) -> str:
+        return f'esp_sleep_enable_timer_wakeup((uint64_t)({duration_us_expr}));\n  esp_light_sleep_start();'
+
+    def set_wakeup_pin(self, pin_expr: str, level: str) -> str:
+        level_val = 'HIGH' if level in ('HIGH', '1', 'true') else 'LOW'
+        return (
+            f'esp_sleep_enable_ext0_wakeup((gpio_num_t){pin_expr}, '
+            f'{level_val} == HIGH ? 1 : 0);'
+        )
+
+    def set_wakeup_timer(self, duration_us_expr: str) -> str:
+        return f'esp_sleep_enable_timer_wakeup((uint64_t)({duration_us_expr}));'
+
+    def get_wakeup_cause(self) -> str:
+        return 'esp_sleep_get_wakeup_cause()'
+
+    # ── Watchdog ───────────────────────────────────────────────────
+
+    def watchdog_enable(self, timeout_ms: int) -> str:
+        return (
+            f'esp_task_wdt_init({timeout_ms}, true);\n'
+            f'  esp_task_wdt_add(NULL);'
+        )
+
+    def watchdog_reset(self) -> str:
+        return 'esp_task_wdt_reset();'
+
+    # ── Filesystem (LittleFS) ──────────────────────────────────────
+
+    def filesystem_mount(self, fs_type: str, mount_point: str = '/fs') -> str:
+        if fs_type == 'littlefs':
+            return (
+                f'if (!LittleFS.begin(true)) {{\n'
+                f'    Serial.println("LittleFS mount failed");\n'
+                f'  }}'
+            )
+        elif fs_type == 'fat':
+            return (
+                f'if (!FFat.begin(true)) {{\n'
+                f'    Serial.println("FFat mount failed");\n'
+                f'  }}'
+            )
+        return f'/* mount {fs_type} — not supported */'
+
+    def filesystem_open(self, path_expr: str, mode: str) -> str:
+        mode_map = {'r': 'FILE_READ', 'w': 'FILE_WRITE', 'a': 'FILE_APPEND', 'r+': 'FILE_READ'}
+        c_mode = mode_map.get(mode, 'FILE_READ')
+        return f'LittleFS.open({path_expr}, "{mode}")'
+
+    def filesystem_read(self, file_expr: str, buf_expr: str, size_expr: str) -> str:
+        return f'(int)({file_expr}.read((uint8_t*)({buf_expr}), (size_t)({size_expr})))'
+
+    def filesystem_write(self, file_expr: str, buf_expr: str, size_expr: str) -> str:
+        return f'(int)({file_expr}.write((const uint8_t*)({buf_expr}), (size_t)({size_expr})))'
+
+    def filesystem_close(self, file_expr: str) -> str:
+        return f'{file_expr}.close()'
+
+    def filesystem_exists(self, path_expr: str) -> str:
+        return f'LittleFS.exists({path_expr})'
+
+    def filesystem_list_dir(self, path_expr: str) -> str:
+        return (
+            f'File _dir = LittleFS.open({path_expr});\n'
+            f'  if (_dir && _dir.isDirectory()) {{\n'
+            f'    File _entry = _dir.openNextFile();\n'
+            f'    while (_entry) {{\n'
+            f'      Serial.println(_entry.name());\n'
+            f'      _entry = _dir.openNextFile();\n'
+            f'    }}\n'
+            f'  }}'
+        )
+
+    # ── Flash / EEPROM (Preferences/NVS) ──────────────────────────
+
+    def flash_read_bytes(self, addr_expr: str, buf_expr: str, size_expr: str) -> str:
+        return (
+            f'preferences.getBytes((const char*)({addr_expr}), '
+            f'(void*)({buf_expr}), (size_t)({size_expr}))'
+        )
+
+    def flash_write_bytes(self, addr_expr: str, buf_expr: str, size_expr: str) -> str:
+        return (
+            f'preferences.putBytes((const char*)({addr_expr}), '
+            f'(const void*)({buf_expr}), (size_t)({size_expr}))'
+        )
+
+    def flash_erase_sector(self, addr_expr: str) -> str:
+        return f'preferences.remove((const char*)({addr_expr}))'
+
+    def flash_get_size(self) -> str:
+        return 'preferences.freeEntries()'
+
+    # ── WiFi ────────────────────────────────────────────────────────
+
+    def wifi_begin(self, ssid_expr: str, password_expr: str) -> str:
+        return (
+            f'WiFi.begin({ssid_expr}, {password_expr});\n'
+            f'  while (WiFi.status() != WL_CONNECTED) {{\n'
+            f'    delay(500);\n'
+            f'    Serial.print(".");\n'
+            f'  }}'
+        )
+
+    def wifi_status(self) -> str:
+        return '(WiFi.status() == WL_CONNECTED ? 1 : 0)'
+
+    def wifi_local_ip(self) -> str:
+        return 'WiFi.localIP().toString().c_str()'
+
+    def wifi_disconnect(self) -> str:
+        return 'WiFi.disconnect(true);'
+
+    # ── BLE ─────────────────────────────────────────────────────────
+
+    def ble_begin(self, device_name_expr: str) -> str:
+        return (
+            f'BLEDevice::init({device_name_expr});\n'
+            f'  BLEServer *_ble_server = BLEDevice::createServer();'
+        )
+
+    def ble_start_advertising(self) -> str:
+        return (
+            f'BLEAdvertising *_ble_adv = _ble_server->getAdvertising();\n'
+            f'  _ble_adv->start();'
+        )
+
+    def ble_stop_advertising(self) -> str:
+        return (
+            f'BLEAdvertising *_ble_adv = _ble_server->getAdvertising();\n'
+            f'  _ble_adv->stop();'
+        )
+
+    def ble_set_value(self, characteristic_expr: str, value_expr: str) -> str:
+        return f'{characteristic_expr}->setValue((const char*)({value_expr}));\n  {characteristic_expr}->notify();'
+
+    def ble_get_value(self, characteristic_expr: str) -> str:
+        return f'{characteristic_expr}->getValue().c_str()'
+
+    # ── OTA Updates ─────────────────────────────────────────────────
+
+    def ota_begin(self, size_expr: str) -> str:
+        return (
+            f'if (!Update.begin((size_t)({size_expr}))) {{\n'
+            f'    Serial.println("OTA begin failed");\n'
+            f'  }}'
+        )
+
+    def ota_write(self, buf_expr: str, size_expr: str) -> str:
+        return f'Update.write((const uint8_t*)({buf_expr}), (size_t)({size_expr}))'
+
+    def ota_end(self) -> str:
+        return (
+            f'if (Update.end()) {{\n'
+            f'    Serial.println("OTA complete — rebooting");\n'
+            f'    ESP.restart();\n'
+            f'  }}'
+        )
+
+    def ota_rollback(self) -> str:
+        return 'Update.rollBack(); ESP.restart();'
+
+    # ── Secure Boot ─────────────────────────────────────────────────
+
+    def secure_boot_check(self) -> str:
+        # ESP32 secure boot v2 status
+        return '(REG_READ(EFUSE_BLK0_RDATA5_REG) & (1 << 7)) != 0'
+
+    # ── Debug ──────────────────────────────────────────────────────
+
+    def breakpoint_instruction(self) -> str:
+        # Xtensa break instruction
+        return 'asm("break 0,0")'
+
     # ── misc ───────────────────────────────────────────────────────
 
     def yield_func(self) -> str:

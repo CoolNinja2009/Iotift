@@ -1,0 +1,8 @@
+// power.iot — Power Management API
+// Provides deep sleep, light sleep, and wake source configuration.
+
+extern fn deepSleep(uint64 duration_us);
+extern fn lightSleep(uint64 duration_us);
+extern fn setWakeupPin(int pin, str level);
+extern fn setWakeupTimer(uint64 duration_us);
+extern fn wakeupCause() -> int;

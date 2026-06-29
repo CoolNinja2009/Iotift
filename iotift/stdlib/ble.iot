@@ -1,0 +1,8 @@
+// ble.iot — Bluetooth Low Energy API
+// BLE peripheral role: advertise, expose characteristics, handle connections.
+
+extern fn bleBegin(str device_name);
+extern fn bleStartAdvertising();
+extern fn bleStopAdvertising();
+extern fn bleSetValue(str characteristic, str value);
+extern fn bleGetValue(str characteristic) -> str;

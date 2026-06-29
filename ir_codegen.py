@@ -16,7 +16,7 @@ from ir import (
     IRCast, IRArrayAccess, IRMemberAccess, IRInstr,
 )
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 
 
 def _dedent(text: str) -> str:
@@ -634,6 +634,10 @@ class IRCodeGen:
 
         if isinstance(instr, IRCall):
             args = ', '.join(self._value_c(a) for a in instr.args)
+            if instr.func == 'breakpoint':
+                if self._hal:
+                    return self._hal.breakpoint_instruction() + ';'
+                return '/* breakpoint */'
             if instr.dest:
                 dst = self._value_c(instr.dest)
                 return f'{dst} = {instr.func}({args});'

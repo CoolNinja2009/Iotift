@@ -1,0 +1,7 @@
+// ota.iot — Over-The-Air Update API
+// Receive and apply firmware updates over WiFi/BLE.
+
+extern fn otaBegin(int size);
+extern fn otaWrite(str buffer, int size) -> int;
+extern fn otaEnd();
+extern fn otaRollback();

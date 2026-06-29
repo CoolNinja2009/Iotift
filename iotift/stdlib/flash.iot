@@ -1,0 +1,7 @@
+// flash.iot — Flash / EEPROM Storage API (NVS / Preferences)
+// Non-volatile key-value storage in flash.
+
+extern fn flashRead(str key, str buffer, int size) -> int;
+extern fn flashWrite(str key, str buffer, int size) -> int;
+extern fn flashErase(str key);
+extern fn flashSize() -> int;

@@ -10,7 +10,7 @@ from ast_nodes import *
 from typing import List, Any, Optional
 import re
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 
 class CodeGenError(Exception):
@@ -743,6 +743,11 @@ class CodeGen:
             args = ', '.join(self._expr_c(a) for a in node.args)
             if node.name == 'esp_restart':
                 return 'ESP.restart();'
+            if node.name == 'breakpoint':
+                # Emit target-specific breakpoint instruction
+                if self._device.startswith('esp32'):
+                    return 'asm("break 0,0");'
+                return '/* breakpoint */'
             return f'{node.name}({args});'
 
         # ── MethodCall ────────────────────────

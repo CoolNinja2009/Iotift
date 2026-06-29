@@ -1,0 +1,10 @@
+// filesystem.iot — Filesystem API (LittleFS / FAT)
+// Provides file I/O on flash storage.
+
+extern fn mount(str fs_type, str mount_point);
+extern fn open(str path, str mode) -> int;   // returns file handle
+extern fn read(int file, str buffer, int size) -> int;
+extern fn write(int file, str buffer, int size) -> int;
+extern fn close(int file);
+extern fn exists(str path) -> bool;
+extern fn listDir(str path);

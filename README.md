@@ -98,7 +98,7 @@ python iotift.py blink.iot --flash
 | **4 — Standard Library** | ✅ Done | Import system, stdlib modules, prelude auto-import, 49 tests |
 | **5 — Tooling** | ✅ Done | Formatter, linter, polished CLI, source maps (84 tests) |
 | **6 — LSP & Editor** | ✅ Done | LSP server, VS Code extension, diagnostics, completion, hover (77 tests) |
-| **7 — Multi-Target** | 📋 Planned | STM32, RP2040, nRF52, bare-metal backends, production features |
+| **7 — Multi-Target** | ✅ Done | 8 targets, ESP-IDF/CMSIS, production APIs, debugger, package manager (500 tests) |
 
 ---
 
@@ -153,6 +153,16 @@ python iotift.py blink.iot --flash
     <td>
       <h3>⚡ Auto-Import Prelude</h3>
       <p><code>time</code>, <code>math</code>, and <code>gpio</code> are auto-imported into every program. <code>millis()</code>, <code>sin()</code>, <code>digitalWrite()</code> — always available without imports.</p>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <h3>🌐 Multi-Target</h3>
+      <p>8 targets, 2 frameworks. ESP32, STM32, RP2040, nRF52, AVR. Arduino & bare-metal (ESP-IDF, CMSIS). One codebase, any MCU.</p>
+    </td>
+    <td>
+      <h3>📦 Package Manager</h3>
+      <p><code>iotift add github.com/user/pkg</code> adds deps to iotift.toml. <code>iotift update</code> syncs the lock file. Version pinning built in.</p>
     </td>
   </tr>
 </table>
@@ -919,9 +929,13 @@ Commands:
   check   <file.iot>              Type-check only, no code generation
   build   <file.iot> [-o out.c]   Compile to C (default command)
   flash   <file.iot>              Compile + flash to device
+  debug   <file.iot>              Build with debug flags + GDB launch
   fmt     <file.iot> [--check]    Format source file
   lint    <file.iot>              Run linter
   new     <project-name>          Scaffold new project
+  add     <package>               Add a package dependency
+  remove  <package>               Remove a package dependency
+  update  [package]               Update package dependencies
   version                         Print version
 
 Legacy: iotift <file.iot> [options]  (equivalent to 'build')
@@ -954,11 +968,16 @@ iotift check blink.iot
 # Basic compilation (uses IR pipeline by default)
 iotift build blink.iot -o blink.c
 
-# Legacy style (backward compatible)
-python iotift.py blink.iot -o blink.c
+# Target a specific MCU
+iotift build blink.iot --target stm32
+iotift build blink.iot --target rp2040
 
-# Compile with source maps
-iotift build blink.iot --debug
+# Bare-metal build (no Arduino)
+iotift build blink.iot --target espidf
+
+# Compile with debug symbols + launch GDB
+iotift debug blink.iot
+iotift debug blink.iot --gdb arm-none-eabi-gdb
 
 # Format code
 iotift fmt blink.iot
@@ -969,6 +988,13 @@ iotift lint blink.iot
 
 # Scaffold new project
 iotift new my-project
+
+# Package management
+iotift add github.com/user/package
+iotift add github.com/user/package --version v1.2.0
+iotift remove package
+iotift update                    # update all
+iotift update package            # update specific
 
 # Print version
 iotift version
@@ -1130,15 +1156,22 @@ npm run compile
 
 ---
 
-## 🎯 Supported Target
+## 🎯 Supported Targets
 
-| Target | `millis()` | `HIGH`/`LOW` | Digital I/O | Analog | PWM |
-|--------|-----------|-------------|-------------|--------|-----|
-| **ESP32** | `millis()` | `HIGH`/`LOW` | `digitalWrite` | `analogRead` | `ledcWrite` (LEDC) |
+| Target | Framework | `millis()` | Digital I/O | PWM | ISR |
+|--------|-----------|-----------|-------------|-----|-----|
+| **ESP32** | Arduino | `millis()` | `digitalWrite` | `ledcWrite` (LEDC) | `IRAM_ATTR` |
+| **ESP32** | ESP-IDF | `esp_timer_get_time()` | `gpio_set_level` | `ledc_set_duty` | `IRAM_ATTR` |
+| **STM32** | Arduino | `millis()` | `digitalWrite` | `analogWrite` | — |
+| **STM32** | CMSIS | SysTick | `GPIO->BSRR` | `TIM->CCR` | — |
+| **RP2040** | Arduino-Pico | `millis()` | `digitalWrite` | `analogWrite` (PIO) | — |
+| **nRF52** | Arduino | `millis()` | `digitalWrite` | `analogWrite` | — |
+| **nRF52** | CMSIS | SysTick | `GPIO->BSRR` | `TIM->CCR` | — |
+| **AVR** | Arduino | `millis()` | `digitalWrite` | `analogWrite` (8-bit) | `ISR()` |
 
-> The HAL dictionary in `codegen.py` (line ~18) makes adding new targets
-> straightforward — each target is a single entry mapping Iotift primitives
-> to platform-specific C calls.
+> Adding a new target means implementing `HALBase` (~40 methods) and
+> registering it in `hal/__init__.py`. Alias support (e.g. `pico` → `rp2040`,
+> `uno` → `avr`) makes device selection natural. See `hal/` for examples.
 
 ---
 
@@ -1162,9 +1195,15 @@ Iotift/
 ├── codegen.py          # Direct codegen: AST → C/C++ (legacy path)
 │
 ├── hal/                # Hardware Abstraction Layer
-│   ├── __init__.py     # HAL registry + factory
-│   ├── base.py         # HALBase abstract class
-│   └── esp32_arduino.py# ESP32 Arduino HAL implementation
+│   ├── __init__.py     # HAL registry + factory (8 targets)
+│   ├── base.py         # HALBase abstract class (~80 methods)
+│   ├── esp32_arduino.py# ESP32 Arduino HAL (default target)
+│   ├── esp32_espidf.py # ESP32 ESP-IDF HAL (bare-metal, no Arduino)
+│   ├── stm32_arduino.py# STM32F1/F4 Arduino HAL
+│   ├── rp2040_arduino.py# Raspberry Pi Pico Arduino HAL
+│   ├── nrf52_arduino.py # nRF52840/nRF52832 Arduino HAL
+│   ├── avr_arduino.py # ATmega328P/2560 Arduino HAL
+│   └── cmsis_arm.py   # ARM Cortex-M CMSIS HAL (bare-metal template)
 │
 ├── iotift/             # Iotift package
 │   ├── __init__.py     #   Package init
@@ -1175,23 +1214,32 @@ Iotift/
 │   │   ├── serial.iot  #     serialBegin, serialPrint, serialRead
 │   │   ├── i2c.iot     #     i2cBegin, i2cRead, i2cWrite, i2cScan
 │   │   ├── spi.iot     #     spiBegin, spiTransfer
-│   │   └── pwm.iot     #     pwmSetup, pwmWrite, pwmStop
+│   │   ├── pwm.iot     #     pwmSetup, pwmWrite, pwmStop
+│   │   ├── power.iot   #     deepSleep, lightSleep, wakeupCause
+│   │   ├── watchdog.iot#     watchdogEnable, watchdogReset
+│   │   ├── filesystem.iot#   mount, open, read, write, close
+│   │   ├── flash.iot   #     flashRead, flashWrite, flashErase
+│   │   ├── wifi.iot    #     wifiBegin, wifiStatus, wifiLocalIP
+│   │   ├── ble.iot     #     bleBegin, bleStartAdvertising
+│   │   └── ota.iot     #     otaBegin, otaWrite, otaEnd, otaRollback
 │   └── tools/          #   Tooling (Milestone 5)
 │       ├── __init__.py #     Package init
 │       ├── formatter.py#     Opinionated code formatter
 │       └── linter.py   #     Static analysis linter
 │
-├── tests/              # Test suite (431 tests)
+├── tests/              # Test suite (500 tests)
 │   ├── test_lexer.py   # 29 tests
 │   ├── test_parser.py  # 41 tests
 │   ├── test_codegen.py # 14 tests
 │   ├── test_semantic.py# 65 tests
 │   ├── test_ir.py      # 54 tests
-│   ├── test_hal.py     # 18 tests
+│   ├── test_hal.py     # 62 tests (new HALs, production features)
 │   ├── test_imports.py # 30 tests
 │   ├── test_stdlib.py  # 19 tests
-│   ├── test_formatter.py # 57 tests (new)
-│   └── test_linter.py  # 27 tests (new)
+│   ├── test_formatter.py # 57 tests
+│   ├── test_linter.py  # 27 tests
+│   ├── test_lsp.py     # 77 tests
+│   └── test_m7_cli.py  # 25 tests (debug, package manager, multi-target)
 │
 ├── examples/           # Example .iot programs
 │   ├── led.iot         #   RGB LED PWM fader

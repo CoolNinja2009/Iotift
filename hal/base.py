@@ -190,6 +190,162 @@ class HALBase(ABC):
         """Return the C attribute for ISR functions (e.g. 'IRAM_ATTR ')."""
         ...
 
+    # ── Power Management ─────────────────────────────────────────
+
+    def deep_sleep(self, duration_us_expr: str) -> str:
+        """Enter deep sleep for *duration_us_expr* microseconds (0 = forever)."""
+        return f'/* deep_sleep({duration_us_expr}) — not implemented for {self.target_name} */'
+
+    def light_sleep(self, duration_us_expr: str) -> str:
+        """Enter light sleep for *duration_us_expr* microseconds."""
+        return f'/* light_sleep({duration_us_expr}) — not implemented for {self.target_name} */'
+
+    def set_wakeup_pin(self, pin_expr: str, level: str) -> str:
+        """Configure a pin as a wake source (level: 'HIGH' or 'LOW')."""
+        return f'/* wakeup pin {pin_expr} — not implemented for {self.target_name} */'
+
+    def set_wakeup_timer(self, duration_us_expr: str) -> str:
+        """Configure a timer wake-up after *duration_us_expr* microseconds."""
+        return f'/* wakeup timer {duration_us_expr} — not implemented for {self.target_name} */'
+
+    def get_wakeup_cause(self) -> str:
+        """Return the wake-up cause as a C expression."""
+        return '0  /* unknown wake cause */'
+
+    # ── Watchdog ───────────────────────────────────────────────────
+
+    def watchdog_enable(self, timeout_ms: int) -> str:
+        """Enable the hardware watchdog with *timeout_ms* timeout."""
+        return f'/* watchdog_enable({timeout_ms}) — not implemented for {self.target_name} */'
+
+    def watchdog_reset(self) -> str:
+        """Reset (feed) the watchdog timer."""
+        return f'/* watchdog_reset() — not implemented for {self.target_name} */'
+
+    # ── Filesystem ─────────────────────────────────────────────────
+
+    def filesystem_mount(self, fs_type: str, mount_point: str = '/fs') -> str:
+        """Mount a filesystem (e.g. 'littlefs', 'fat')."""
+        return f'/* mount {fs_type} at {mount_point} — not implemented for {self.target_name} */'
+
+    def filesystem_open(self, path_expr: str, mode: str) -> str:
+        """Open a file. Mode: 'r', 'w', 'a', 'r+'. Returns FILE* expression."""
+        return f'(NULL /* file open not implemented for {self.target_name} */)'
+
+    def filesystem_read(self, file_expr: str, buf_expr: str, size_expr: str) -> str:
+        """Read from a file into buffer."""
+        return f'0 /* read not implemented */'
+
+    def filesystem_write(self, file_expr: str, buf_expr: str, size_expr: str) -> str:
+        """Write buffer to a file."""
+        return f'0 /* write not implemented */'
+
+    def filesystem_close(self, file_expr: str) -> str:
+        """Close a file."""
+        return f'/* close not implemented */'
+
+    def filesystem_exists(self, path_expr: str) -> str:
+        """Check if a path exists. Returns bool C expression."""
+        return f'false /* exists not implemented */'
+
+    def filesystem_list_dir(self, path_expr: str) -> str:
+        """List directory contents."""
+        return f'/* list_dir({path_expr}) — not implemented */'
+
+    # ── Flash / EEPROM Storage ──────────────────────────────────────
+
+    def flash_read_bytes(self, addr_expr: str, buf_expr: str, size_expr: str) -> str:
+        """Read bytes from flash/EEPROM at *addr_expr*."""
+        return f'/* flash_read({addr_expr}) — not implemented for {self.target_name} */'
+
+    def flash_write_bytes(self, addr_expr: str, buf_expr: str, size_expr: str) -> str:
+        """Write bytes to flash/EEPROM at *addr_expr*."""
+        return f'/* flash_write({addr_expr}) — not implemented for {self.target_name} */'
+
+    def flash_erase_sector(self, addr_expr: str) -> str:
+        """Erase a flash sector containing *addr_expr*."""
+        return f'/* flash_erase({addr_expr}) — not implemented for {self.target_name} */'
+
+    def flash_get_size(self) -> str:
+        """Return total flash/EEPROM size in bytes as a C expression."""
+        return '0 /* flash size unknown */'
+
+    # ── WiFi ────────────────────────────────────────────────────────
+
+    def wifi_begin(self, ssid_expr: str, password_expr: str) -> str:
+        """Connect to a WiFi network."""
+        return f'/* wifi_begin({ssid_expr}, ***) — not implemented for {self.target_name} */'
+
+    def wifi_status(self) -> str:
+        """Return WiFi connection status as a C expression (0 = disconnected, 1 = connected)."""
+        return '0 /* wifi status not implemented */'
+
+    def wifi_local_ip(self) -> str:
+        """Return local IP address as a C string expression."""
+        return '"0.0.0.0" /* wifi ip not implemented */'
+
+    def wifi_disconnect(self) -> str:
+        """Disconnect from WiFi."""
+        return f'/* wifi_disconnect() — not implemented for {self.target_name} */'
+
+    # ── BLE ─────────────────────────────────────────────────────────
+
+    def ble_begin(self, device_name_expr: str) -> str:
+        """Initialize BLE with *device_name_expr*."""
+        return f'/* ble_begin({device_name_expr}) — not implemented for {self.target_name} */'
+
+    def ble_start_advertising(self) -> str:
+        """Start BLE advertising."""
+        return f'/* ble_advertise() — not implemented for {self.target_name} */'
+
+    def ble_stop_advertising(self) -> str:
+        """Stop BLE advertising."""
+        return f'/* ble_stop_advertise() — not implemented for {self.target_name} */'
+
+    def ble_set_value(self, characteristic_expr: str, value_expr: str) -> str:
+        """Set a BLE characteristic value."""
+        return f'/* ble_set_value({characteristic_expr}) — not implemented */'
+
+    def ble_get_value(self, characteristic_expr: str) -> str:
+        """Get a BLE characteristic value as a C expression."""
+        return '0 /* ble_get_value not implemented */'
+
+    # ── OTA Updates ─────────────────────────────────────────────────
+
+    def ota_begin(self, size_expr: str) -> str:
+        """Begin an OTA update of *size_expr* bytes."""
+        return f'/* ota_begin({size_expr}) — not implemented for {self.target_name} */'
+
+    def ota_write(self, buf_expr: str, size_expr: str) -> str:
+        """Write a chunk to the OTA partition."""
+        return f'/* ota_write({size_expr}) — not implemented for {self.target_name} */'
+
+    def ota_end(self) -> str:
+        """Finalize the OTA update."""
+        return f'/* ota_end() — not implemented for {self.target_name} */'
+
+    def ota_rollback(self) -> str:
+        """Roll back to the previous firmware."""
+        return f'/* ota_rollback() — not implemented for {self.target_name} */'
+
+    # ── Secure Boot ─────────────────────────────────────────────────
+
+    def secure_boot_check(self) -> str:
+        """Return a C expression that is true if secure boot is enabled."""
+        return 'false /* secure boot check not implemented */'
+
+    # ── Debug ──────────────────────────────────────────────────────
+
+    def breakpoint_instruction(self) -> str:
+        """Return a C breakpoint/trap instruction for the target.
+
+        ARM Cortex-M: __asm__("bkpt #0")
+        ESP32 (Xtensa): __asm__("break 0,0")
+        AVR: __asm__("break")
+        x86: __asm__("int3")
+        """
+        return '/* breakpoint — not implemented for this target */'
+
     # ── misc ─────────────────────────────────────────────────────
 
     def yield_func(self) -> str:

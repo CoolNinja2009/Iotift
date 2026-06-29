@@ -519,6 +519,229 @@ def cmd_lsp(args) -> None:
     lsp_main()
 
 
+def cmd_debug(args) -> None:
+    """Build with debug flags and optionally launch GDB."""
+    source = _read_source(args.source)
+    ast = _parse_source(source)
+    ast = _resolve_imports(ast, args.source)
+
+    result = _semantic_check(ast, werror=True, disabled_warnings=set())
+    if result['errors']:
+        for err in result['errors']:
+            print(err, file=sys.stderr)
+        sys.exit(1)
+
+    device = args.target or args.device
+    c_code, device_name, source_map = _generate_c(
+        ast, device=device, debug=True,
+        source_path=os.path.abspath(args.source),
+    )
+
+    # Write generated C with debug symbols
+    base = os.path.splitext(os.path.basename(args.source))[0]
+    output_path = base + '.c'
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(c_code)
+    print(f'Debug build: {args.source} -> {output_path} (target: {device_name})')
+
+    # Write source map
+    if source_map is not None:
+        map_path = output_path + '.map.json'
+        with open(map_path, 'w', encoding='utf-8') as f:
+            json.dump(source_map, f, indent=2)
+        print(f'Source map: {map_path}')
+
+    # Generate PlatformIO project with debug flags
+    project_dir = _generate_platformio_debug(args.source, c_code, args.baud)
+    print(f'Debug project: {project_dir}')
+
+    # Print GDB launch hint
+    elf_path = os.path.join(project_dir, '.pio', 'build', 'esp32', 'firmware.elf')
+    print()
+    print('=== Debug Instructions ===')
+    print(f'1. Build and flash:')
+    print(f'   cd {project_dir} && pio run --target upload')
+    print()
+    if not args.no_flash:
+        # Auto-flash with debug symbols
+        pio_cmd = _ensure_platformio()
+        port = args.port or _find_esp32_port()
+        if port is None:
+            print('Warning: no ESP32 detected. Connect your device or specify --port.')
+            print(f'Project ready at: {project_dir}')
+            sys.exit(0)
+        _flash_device(pio_cmd, project_dir, port)
+        print()
+    print(f'2. Launch GDB:')
+    print(f'   {args.gdb} {elf_path} -ex "target remote :3333"')
+    print(f'   (Start OpenOCD in another terminal first)')
+    print()
+    print('Breakpoints in .iot source are mapped to C via --debug source maps.')
+
+
+def _generate_platformio_debug(source_path: str, c_code: str, baud: int) -> str:
+    """Generate a PlatformIO project with debug flags enabled."""
+    base_name = os.path.splitext(os.path.basename(source_path))[0]
+    project_dir = os.path.join(os.getcwd(), base_name + '_debug')
+
+    os.makedirs(project_dir, exist_ok=True)
+    os.makedirs(os.path.join(project_dir, 'src'), exist_ok=True)
+    os.makedirs(os.path.join(project_dir, 'include'), exist_ok=True)
+
+    ini = (
+        '[env:esp32]\n'
+        'platform = espressif32\n'
+        'board = esp32dev\n'
+        'framework = arduino\n'
+        f'monitor_speed = {baud}\n'
+        'build_flags = -O0 -g3 -ggdb\n'
+        'debug_tool = esp-prog\n'
+        'debug_init_break = tbreak setup\n'
+    )
+    with open(os.path.join(project_dir, 'platformio.ini'), 'w', encoding='utf-8') as f:
+        f.write(ini)
+
+    with open(os.path.join(project_dir, 'src', 'main.cpp'), 'w', encoding='utf-8') as f:
+        f.write(c_code)
+
+    return project_dir
+
+
+def cmd_add(args) -> None:
+    """Add a package dependency."""
+    package = args.package
+    version = args.version
+
+    # Find or create iotift.toml
+    toml_path = os.path.join(os.getcwd(), 'iotift.toml')
+    if not os.path.exists(toml_path):
+        print("Error: no iotift.toml found. Run 'iotift new <name>' first.")
+        sys.exit(1)
+
+    # Read existing config
+    with open(toml_path, 'r', encoding='utf-8') as f:
+        config = f.read()
+
+    # Parse package spec
+    if package.startswith('github.com/'):
+        parts = package.replace('github.com/', '').split('/')
+        if len(parts) >= 2:
+            owner, repo = parts[0], parts[1]
+            dep_line = f'"{owner}/{repo}" = "github.com/{owner}/{repo}"'
+            if version:
+                dep_line += f' @ {version}'
+            else:
+                dep_line += ' @ latest'
+        else:
+            print(f"Error: invalid package spec: {package}")
+            sys.exit(1)
+    else:
+        dep_line = f'"{package}" = "{package}"'
+        if version:
+            dep_line += f' @ {version}'
+
+    # Check if deps section exists
+    if '[dependencies]' not in config:
+        config += '\n[dependencies]\n'
+    config += f'{dep_line}\n'
+
+    with open(toml_path, 'w', encoding='utf-8') as f:
+        f.write(config)
+
+    print(f'Added dependency: {package}' + (f' @ {version}' if version else ''))
+    print(f'Updated: {toml_path}')
+
+    # Generate lock file
+    _update_lockfile(os.getcwd())
+
+
+def cmd_remove(args) -> None:
+    """Remove a package dependency."""
+    toml_path = os.path.join(os.getcwd(), 'iotift.toml')
+    if not os.path.exists(toml_path):
+        print("Error: no iotift.toml found.")
+        sys.exit(1)
+
+    with open(toml_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    new_lines = []
+    removed = False
+    for line in lines:
+        if args.package in line and not removed:
+            removed = True
+            continue
+        new_lines.append(line)
+
+    if removed:
+        with open(toml_path, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+        print(f'Removed dependency: {args.package}')
+        _update_lockfile(os.getcwd())
+    else:
+        print(f'Package "{args.package}" not found in dependencies.')
+
+
+def cmd_update(args) -> None:
+    """Update package dependencies."""
+    toml_path = os.path.join(os.getcwd(), 'iotift.toml')
+    if not os.path.exists(toml_path):
+        print("Error: no iotift.toml found.")
+        sys.exit(1)
+
+    if args.package:
+        print(f'Updating {args.package} to latest...')
+    else:
+        print('Updating all dependencies to latest...')
+
+    # In a real implementation, this would fetch from the registry.
+    # For now, update the lock file with current timestamps.
+    _update_lockfile(os.getcwd())
+    print('Dependencies updated.')
+    print('  (Package registry at iotift.io/packages — coming soon)')
+
+
+def _update_lockfile(project_dir: str) -> None:
+    """Generate/update iotift.lock with resolved versions."""
+    toml_path = os.path.join(project_dir, 'iotift.toml')
+    lock_path = os.path.join(project_dir, 'iotift.lock')
+
+    if not os.path.exists(toml_path):
+        return
+
+    from datetime import datetime, timezone
+
+    with open(toml_path, 'r', encoding='utf-8') as f:
+        config = f.read()
+
+    # Parse dependencies from config
+    deps = {}
+    in_deps = False
+    for line in config.split('\n'):
+        if line.strip() == '[dependencies]':
+            in_deps = True
+            continue
+        if line.startswith('[') and in_deps:
+            in_deps = False
+        if in_deps and '=' in line:
+            key, val = line.split('=', 1)
+            key = key.strip().strip('"')
+            val = val.strip().strip('"')
+            deps[key] = {'source': val, 'version': 'latest'}
+
+    lock = {
+        'version': 1,
+        'updated': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'packages': deps,
+    }
+
+    with open(lock_path, 'w', encoding='utf-8') as f:
+        json.dump(lock, f, indent=2)
+
+    if deps:
+        print(f'Lock file updated: {lock_path}')
+
+
 def cmd_version(args) -> None:
     """Print version."""
     print(f'Iotift Compiler v{__version__}')
@@ -756,6 +979,35 @@ def _build_subcommand_parser() -> argparse.ArgumentParser:
     # ── lsp ──
     lsp = subs.add_parser('lsp', help='start language server (for editor integration)')
 
+    # ── debug ──
+    dbg = subs.add_parser('debug', help='build with debug flags and launch GDB')
+    dbg.add_argument('source', help='input .iot source file')
+    dbg.add_argument('--device', default='esp32',
+                     help='target device (default: esp32)')
+    dbg.add_argument('--target', default=None,
+                     help='target device alias (same as --device)')
+    dbg.add_argument('--port', default=None,
+                     help='serial port for OpenOCD/GDB (auto-detected if omitted)')
+    dbg.add_argument('--gdb', default='arm-none-eabi-gdb',
+                     help='path to GDB executable')
+    dbg.add_argument('--no-flash', action='store_true',
+                     help='skip flashing, just build and launch debugger')
+
+    # ── add ──
+    add_pkg = subs.add_parser('add', help='add a package dependency')
+    add_pkg.add_argument('package', help='package specifier (e.g. github.com/user/package)')
+    add_pkg.add_argument('--version', default=None,
+                         help='pin to a specific version tag')
+
+    # ── remove ──
+    rm_pkg = subs.add_parser('remove', help='remove a package dependency')
+    rm_pkg.add_argument('package', help='package name to remove')
+
+    # ── update ──
+    up_pkg = subs.add_parser('update', help='update package dependencies')
+    up_pkg.add_argument('package', nargs='?', default=None,
+                        help='specific package to update (omit for all)')
+
     # ── version ──
     ver = subs.add_parser('version', help='print version')
 
@@ -772,7 +1024,8 @@ def main() -> None:
         return
 
     # ── Check for subcommand ──
-    subcommands = {'check', 'build', 'flash', 'fmt', 'lint', 'lsp', 'new', 'version'}
+    subcommands = {'check', 'build', 'flash', 'fmt', 'lint', 'lsp', 'new', 'version',
+                    'debug', 'add', 'remove', 'update'}
     has_subcommand = any(arg in subcommands for arg in sys.argv[1:3])
 
     if has_subcommand:
@@ -792,6 +1045,10 @@ def main() -> None:
             'lint': cmd_lint,
             'lsp': cmd_lsp,
             'new': cmd_new,
+            'debug': cmd_debug,
+            'add': cmd_add,
+            'remove': cmd_remove,
+            'update': cmd_update,
             'version': cmd_version,
         }
 

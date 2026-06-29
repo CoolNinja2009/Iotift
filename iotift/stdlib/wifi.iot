@@ -1,0 +1,7 @@
+// wifi.iot — WiFi API
+// Connect to wireless networks and get connection status.
+
+extern fn wifiBegin(str ssid, str password);
+extern fn wifiStatus() -> int;       // 0 = disconnected, 1 = connected
+extern fn wifiLocalIP() -> str;      // local IP address as string
+extern fn wifiDisconnect();
