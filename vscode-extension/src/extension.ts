@@ -209,24 +209,29 @@ function startLanguageServer(context: vscode.ExtensionContext): void {
     );
 
     // Set trace level from configuration
+    // Trace values: 0=Off, 1=Messages, 2=Verbose
     const traceLevel = config.get<string>('trace.server', 'off');
     if (traceLevel === 'verbose') {
-        client.setTrace(vscode.Trace.Verbose);
+        (client as any).setTrace(2);
     } else if (traceLevel === 'messages') {
-        client.setTrace(vscode.Trace.Messages);
+        (client as any).setTrace(1);
     }
 
-    context.subscriptions.push(client.start());
-
-    client.onReady().then(() => {
+    // Start the client and register it for disposal
+    client.start().then(() => {
         console.log('Iotift language server ready');
+    }).catch((err: Error) => {
+        console.error('Iotift language server failed to start:', err.message);
     });
+
+    // Push the client itself as the disposable (it implements Disposable)
+    context.subscriptions.push(client);
 }
 
 /**
  * Deactivate the extension.
  */
-export function deactivate(): Thenable<void> | undefined {
+export function deactivate(): Promise<void> | undefined {
     if (client) {
         return client.stop();
     }
