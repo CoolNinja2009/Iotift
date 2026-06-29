@@ -379,6 +379,15 @@
 
 ---
 
+
+---
+## MILESTONE 8 — First-Class WiFi  (PLANNED)
+
+Goal: WiFi as a first-class language feature with native syntax support.
+The compiler generates ALL boilerplate: NVS init, TCP/IP stack, event loop,
+WiFi state machine.  Users write only the logic that matters.
+
+Full specification written in the session notes below.
 ## SESSION NOTES
 
 ### Session 2026-06-28 (Architecture Review)
@@ -685,3 +694,339 @@
   - Package registry (iotift.io/packages) is defined but not yet deployed
   - CMSIS HAL is a template — actual pin/peripheral addresses are vendor-specific
   - BLE and WiFi APIs are ESP32-first; other targets have stub implementations
+  - WiFi is still just extern fn wrappers — needs first-class language support (→ M8)
+### 8.1 — WiFi declaration syntax
+
+Three new top-level declaration forms:
+
+**Station mode:**
+```
+wifi <name> = sta "<ssid>" "<password>";
+```
+
+The compiler generates ALL of this:
+- nvs_flash_init() (if not already called)
+- esp_netif_init() + esp_netif_create_default_wifi_sta()
+- esp_event_loop_create_default()
+- esp_wifi_init(&cfg) + esp_wifi_set_mode(WIFI_MODE_STA)
+- esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg)
+- esp_wifi_start()
+- Event handler registrations for WIFI_EVENT and IP_EVENT
+- Connection retry logic (configurable timeout)
+- A bool state variable: _iotift_wifi_<name>_connected
+
+The user writes one line and uses on <name>.connect { ... } for app logic.
+
+**Access Point mode:**
+```
+wifi <name> = ap "<ssid>" "<password>";
+```
+Password is optional — omit for open AP: wifi guestWifi = ap "FreeWiFi";
+
+**Dual mode (STA + AP):**
+```
+wifi <name> = stap "<sta_ssid>" "<sta_password>" ap "<ap_ssid>" "<ap_password>";
+```
+Runs both station and soft-AP simultaneously (ESP32 WIFI_MODE_APSTA).
+
+**Options block (optional):**
+```
+wifi myWifi = sta "ssid" "pass" {
+    hostname:    "iotift-device";
+    timeout:     30s;
+    retries:     3;
+    power_save:  light;
+    static_ip:   "192.168.1.100";
+    gateway:     "192.168.1.1";
+    subnet:      "255.255.255.0";
+};
+```
+
+**Rewritten function names (Iotift => C mapping):**
+
+| Iotift name      | ESP-IDF / Arduino C                    | Notes |
+|------------------|----------------------------------------|-------|
+| wifi.connect()   | esp_wifi_connect()                     | Generated; non-blocking |
+| wifi.disconnect()| esp_wifi_disconnect()                  | Generated |
+| wifi.scan()      | esp_wifi_scan_start()                  | Results via event |
+| wifi.rssi()      | WiFi.RSSI() / esp_wifi_sta_get_ap_info()| Signal strength, returns int |
+| wifi.mac()       | esp_wifi_get_mac()                     | Returns MAC as str |
+| wifi.channel()   | esp_wifi_get_channel()                 | Current channel number |
+| wifi.ip()        | esp_netif_get_ip_info()                | Returns str |
+| wifi.connected   | bool variable                          | True when STA has IP |
+| wifi.clients     | esp_wifi_ap_get_sta_list()             | AP mode only; returns int count |
+
+These become method calls on the wifi declaration (like .running / .stop() on timers).
+The compiler emits the correct C calls based on the HAL.
+
+---
+
+### 8.2 — Lexer: new keywords
+
+Add to KEYWORDS in lexer.py:
+  wifi, sta, ap, stap, scan, connect, disconnect
+
+These are contextual keywords — valid as method names on wifi objects but also
+usable as identifiers elsewhere (same way pin, output work today).
+
+---
+
+### 8.3 — AST: new node types
+
+Add to ast_nodes.py three dataclasses:
+  WifiDecl(name, mode, ssid, password, ap_ssid, ap_password, options, line)
+  OnWifiEvent(wifi_name, event, body, line, end_line)
+  WifiMethodCall(wifi_name, method, args, line)
+
+Events: connect, disconnect, scan_done, got_ip, client_join, client_leave
+Methods: connect, disconnect, scan, rssi, mac, channel, ip, clients
+
+---
+
+### 8.4 — Parser: new parse functions
+
+Add to parser.py (~120 lines):
+  _parse_wifi_decl()       — wifi <name> = <mode> <ssid> [<password>] [{options}];
+  _parse_on_wifi_event()   — on <wifi_name>.<event> { ... }
+  _parse_wifi_options_block() — { hostname: "..."; timeout: 30s; ... }
+  _parse_wifi_method_call()   — <wifi_name>.<method>(<args>)
+
+Wire into _parse_top_level() (after @device/@config/pin branches) and
+extend _parse_on() to distinguish wifi events from pin events.
+
+---
+
+### 8.5 — Semantic analysis
+
+Add to semantic.py (~100 lines):
+  Pass 1: Register WifiDecl as SymbolKind.WIFI in global scope.
+  Pass 2: Resolve wifi_name references in OnWifiEvent + WifiMethodCall.
+  Pass 3: Validate mode rules (STA needs password warning, AP password >= 8
+          chars, stap only on ESP32, .clients only in AP/stap, .scan() only in
+          STA/stap, method call on unknown wifi => error).
+  Pass 4: Block delay()/print in wifi event handlers (run in event loop task).
+
+New warning codes: wifi-no-password, wifi-short-password,
+wifi-stap-on-unsupported-target, wifi-blocking-in-event-handler.
+
+---
+
+### 8.6 — HAL: new WiFi methods
+
+Extend HALBase with ~15 new methods (~100 lines):
+  wifi_init_sta(ssid, password, options) -> List[str]
+  wifi_init_ap(ssid, password_or_none, options) -> List[str]
+  wifi_init_stap(sta_ssid, sta_pass, ap_ssid, ap_pass, options) -> List[str]
+  wifi_scan_start() -> str
+  wifi_scan_results() -> str
+  wifi_scan_ssid(index) -> str
+  wifi_scan_rssi(index) -> str
+  wifi_rssi() -> str
+  wifi_mac() -> str
+  wifi_channel() -> str
+  wifi_ip() -> str
+  wifi_ap_client_count() -> str
+  wifi_event_connect_handler(wifi_name, body_c_code) -> str
+  wifi_event_disconnect_handler(wifi_name, body_c_code) -> str
+  wifi_event_scan_done_handler(wifi_name, body_c_code) -> str
+
+ESP32 Arduino impl: uses WiFi.h / WiFiSTA.h / WiFiAP.h / WiFiScan.h class methods.
+ESP32 ESP-IDF impl: uses native esp_wifi_*, esp_netif_*, esp_event_* functions
+  (PRIMARY TARGET — smaller binary, no Arduino wrapper overhead).
+Other targets: emit #error "WiFi not supported on this target".
+
+---
+
+### 8.7 — Codegen (direct path: codegen.py)
+
+Add to codegen.py (~150 lines):
+  _collect_wifi_decl(node)    — collects into self._wifi_decls, registers handlers
+  _emit_wifi_setup()          — includes, NVS init guard, netif, wifi init + config
+  _emit_wifi_handlers()       — handler functions for on wifi.event blocks
+  _stmt_c() for WifiMethodCall   — emits correct C call per method
+  _expr_c() for WifiMethodCall   — for expression-position calls (rssi, ip, etc.)
+
+NVS init guard: static bool _iotift_nvs_initialized = false; emitted before
+any wifi init to prevent double-init across multiple wifi declarations.
+
+---
+
+### 8.8 — Codegen (IR path: ir_lowering.py + ir_codegen.py)
+
+IR path mirrors direct path (~80 lines across 2 files):
+  ir_lowering.py: _lower_wifi_decl(node) emits setup + event handler functions.
+  ir_codegen.py: _instr_c() handles wifi instructions via HAL.
+  ir.py: Optionally add IRWifiInit, IRWifiScan, IRWifiEvent instructions, or
+    reuse existing IRCall/IRCallIndirect with _iotift_wifi_setup_<name> names.
+
+Must use HAL for all emission (not hardcoded strings) to keep multi-target.
+
+---
+
+### 8.9 — LSP / Formatter / Linter support
+
+LSP (~60 lines): completions after wifi keyword (modes), after wifi_name.
+  (methods + events). Hover shows mode, SSID, IP for wifi declarations.
+
+Formatter (~30 lines): WifiDecl same-line brace, 4-space indent options block.
+  OnWifiEvent same style as on pin.event.
+
+Linter (~40 lines): 3 new rules — wifi-no-password (WARNING), wifi-unused
+  (WARNING), wifi-blocking (ERROR: delay() inside wifi event handler).
+
+---
+
+### 8.10 — TLS / HTTPS (stretch goal)
+
+If time permits, add an http module wrapping esp_http_client_* (ESP-IDF) or
+HTTPClient (Arduino).  GET + POST with string body, response code + body.
+Leave streaming and headers for a future milestone.
+
+```
+import { httpGet, httpPost } from "http";
+on myWifi.connect {
+    str body = httpGet("https://api.example.com/data");
+    print(body);
+}
+```
+
+---
+
+### 8.11 — Tests (~55 new tests)
+
+Create tests/test_wifi.py (~400 lines):
+
+Parser tests (15): parse STA/AP/STAP with/without password, options block,
+  on wifi.event blocks, wifi method calls, error cases (non-string SSID,
+  unknown mode, undeclared wifi name).
+
+Semantic tests (12): STA+password valid, AP open warning, short password
+  warning, stap on AVR error, .clients on STA error, .scan() on AP error,
+  unknown wifi method error, handler name resolution, duplicate name error.
+
+Codegen tests (15): STA emits nvs_flash_init + esp_wifi_init + WIFI_MODE_STA,
+  AP emits equivalents, STAP emits both, options block emits hostname/static IP,
+  on connect generates WIFI_EVENT/IP_EVENT handler, .scan()/.rssi()/.ip()
+  emit correct expressions, no wifi includes leak to non-wifi programs,
+  NVS guard emitted once for multiple declarations.
+
+HAL tests (8): ESP32 Arduino HAL wifi_init_sta returns expected strings,
+  ESP-IDF HAL returns native calls, STM32/AVR emit #error.
+
+Integration tests (5): full pipeline compiles, wifi+handler compiles,
+  led.iot still compiles (no leakage), multiple wifi => unique handler names.
+
+Total: 500 -> ~555 tests.
+
+---
+
+### 8.12 — Documentation & examples
+
+New examples:
+  examples/wifi_thermostat.iot — connects WiFi, runs HTTP server on port 80
+  examples/wifi_scanner.iot — scans networks, prints SSID+RSSI to serial
+
+README.md: Add WiFi section to Language Reference (between Events & Timers
+  and PWM Methods). Add WiFi row to features table.
+
+Version bump: __version__ -> 2.1.0 in codegen.py and ir_codegen.py.
+
+---
+
+### Implementation plan (order of work)
+
+1. Lexer — add keywords (~10 lines, 1 file)
+2. AST — add WifiDecl, OnWifiEvent, WifiMethodCall (~40 lines, 1 file)
+3. Parser — add 4 parse functions, wire into top_level + on (~120 lines, 1 file)
+4. Semantic — Pass 1-4 handling for WiFi (~100 lines, 1 file)
+5. HAL — 15 new methods in base, impl in ESP32 Arduino + ESP-IDF (~200 lines, 3 files)
+6. Codegen (direct) — collect + emit wifi (~150 lines, 1 file)
+7. Codegen (IR) — lowering + emission (~80 lines, 2 files)
+8. LSP — completions + hover (~60 lines, 1 file)
+9. Formatter — wifi nodes (~30 lines, 1 file)
+10. Linter — 3 new rules (~40 lines, 1 file)
+11. Tests — test_wifi.py (~400 lines, 1 file)
+12. Examples — wifi_thermostat.iot + wifi_scanner.iot (~80 lines, 2 files)
+13. Docs — README, TODO.md, version bump (~80 lines, 3 files)
+
+Estimated total: ~1,400 lines across ~18 files.
+
+---
+
+### Files to touch
+
+| File | Change |
+|---|---|
+| lexer.py | +10 lines (keywords) |
+| ast_nodes.py | +40 lines (3 new node types) |
+| parser.py | +120 lines (4 new parse functions) |
+| semantic.py | +100 lines (WiFi passes) |
+| symbol_table.py | +5 lines (WIFI symbol kind) |
+| hal/base.py | +100 lines (new abstract methods) |
+| hal/esp32_arduino.py | +200 lines (Arduino WiFi impl) |
+| hal/esp32_espidf.py | +200 lines (ESP-IDF WiFi impl) |
+| hal/stm32_arduino.py | +20 lines (stub / #error) |
+| hal/avr_arduino.py | +20 lines (stub / #error) |
+| hal/rp2040_arduino.py | +20 lines (stub / #error) |
+| hal/nrf52_arduino.py | +20 lines (stub / #error) |
+| hal/cmsis_arm.py | +20 lines (stub / #error) |
+| codegen.py | +150 lines (WiFi collection + emission) |
+| ir_lowering.py | +50 lines (WiFi lowering) |
+| ir_codegen.py | +30 lines (WiFi HAL calls) |
+| iotift/tools/lsp_server.py | +60 lines (completions + hover) |
+| iotift/tools/formatter.py | +30 lines |
+| iotift/tools/linter.py | +40 lines |
+| tests/test_wifi.py | +400 lines (new) |
+| examples/wifi_thermostat.iot | +50 lines (new) |
+| examples/wifi_scanner.iot | +30 lines (new) |
+| README.md | +80 lines |
+| TODO.md | update M8 status |
+| codegen.py / ir_codegen.py | version -> 2.1.0 |
+
+---
+
+### Non-goals (explicitly out of scope for M8)
+
+- MQTT — deserves its own milestone; needs protocol-level design.
+- BLE mesh / WiFi mesh (ESP-MDF) — large surface area, rare use case.
+- Captive portal / WPS — complexity out of proportion to value.
+- Enterprise WiFi (WPA2-Enterprise / 802.1X) — cert management complexity.
+- Ethernet (LAN8720 / W5500) — separate physical layer, separate milestone.
+- IPv6 only networks — ESP-IDF supports it but rare in embedded.
+- Simultaneous BLE + WiFi coexistence — antenna sharing/timing is M9+.
+
+---
+
+### Backward compatibility
+
+Existing M7 HAL wifi_* methods remain. New wifi declaration replaces them at
+the language level but the HAL interface is extended, not broken. Existing
+wifi.iot stdlib module KEPT for users who prefer extern-fn style.
+
+Existing examples (led.iot, console_rgb.iot, argb.iot) must continue to
+compile — no WiFi code must leak into non-WiFi programs.
+
+---
+
+### Acceptance criteria (20 items)
+
+- [ ] 8.1  — wifi declaration syntax: STA, AP, STA+AP, options block
+- [ ] 8.2  — Lexer: wifi, sta, ap, stap, scan, connect, disconnect keywords
+- [ ] 8.3  — AST: WifiDecl, OnWifiEvent, WifiMethodCall nodes
+- [ ] 8.4  — Parser: parses all wifi syntax forms
+- [ ] 8.5  — Semantic: validates wifi config, resolves names, enforces mode rules
+- [ ] 8.6  — HAL: new WiFi methods with ESP32 Arduino + ESP-IDF implementations
+- [ ] 8.7  — Codegen (direct): emits all WiFi boilerplate from declarations
+- [ ] 8.8  — Codegen (IR): IR lowering + emission for WiFi
+- [ ] 8.9  — LSP: completions + hover for wifi constructs
+- [ ] 8.10 — Formatter: formats wifi declarations and event handlers
+- [ ] 8.11 — Linter: wifi-specific lint rules
+- [ ] 8.12 — ~55 new tests, all existing tests still pass
+- [ ] 8.13 — 2 new examples: wifi_thermostat.iot, wifi_scanner.iot
+- [ ] 8.14 — README updated with WiFi language reference section
+- [ ] 8.15 — All existing examples still compile (no wifi leakage)
+- [ ] 8.16 — Version bumped to 2.1.0
+- [ ] 8.17 — on <wifi>.connect / .disconnect / .scan_done events work
+- [ ] 8.18 — wifi.scan(), .rssi(), .ip(), .mac(), .channel() methods work
+- [ ] 8.19 — Non-ESP32 targets emit clear #error for WiFi use
+- [ ] 8.20 — NVS init guard prevents double-init with multiple wifi declarations

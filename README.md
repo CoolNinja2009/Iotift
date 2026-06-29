@@ -99,6 +99,7 @@ python iotift.py blink.iot --flash
 | **5 — Tooling** | ✅ Done | Formatter, linter, polished CLI, source maps (84 tests) |
 | **6 — LSP & Editor** | ✅ Done | LSP server, VS Code extension, diagnostics, completion, hover (77 tests) |
 | **7 — Multi-Target** | ✅ Done | 8 targets, ESP-IDF/CMSIS, production APIs, debugger, package manager (500 tests) |
+| **8 — First-Class WiFi** | 📋 Planned | Native wifi declaration syntax, event-driven WiFi, rewritten function names |
 
 ---
 
