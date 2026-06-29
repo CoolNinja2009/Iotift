@@ -17,7 +17,7 @@ from typing import List, Optional, Any, Tuple
 _MATH_FUNCTIONS: frozenset = frozenset({
     'sin', 'cos', 'tan', 'sqrt', 'abs', 'pow',
     'floor', 'ceil', 'round', 'log', 'exp',
-    'millis', 'micros',
+    'micros',
     'min', 'max', 'clamp', 'map',
 })
 
@@ -234,9 +234,25 @@ class Parser:
     def _parse_import(self) -> ImportDecl:
         line = self._peek().line
         self._expect(TT.KEYWORD, 'import')
+
+        selected_names = None
+        if self._check(TT.LBRACE):
+            # Selective import: import { Name1, Name2 } from "path";
+            self._advance()  # consume '{'
+            selected_names = []
+            if not self._check(TT.RBRACE):
+                # Parse first name
+                selected_names.append(self._expect(TT.IDENT).value)
+                # Parse remaining names
+                while self._check(TT.COMMA):
+                    self._advance()  # consume ','
+                    selected_names.append(self._expect(TT.IDENT).value)
+            self._expect(TT.RBRACE)  # consume '}'
+            self._expect(TT.KEYWORD, 'from')
+
         path = self._expect(TT.STR_LIT).value
         self._expect_semi()
-        return ImportDecl(line=line, path=path)
+        return ImportDecl(line=line, path=path, selected_names=selected_names)
 
     def _parse_pin(self) -> PinDecl:
         line = self._peek().line
@@ -953,7 +969,7 @@ class Parser:
             return expr
 
         # ── millis() ──
-        if tok.type == TT.KEYWORD and tok.value == 'millis':
+        if tok.type == TT.IDENT and tok.value == 'millis':
             line = tok.line
             self._advance()
             self._expect(TT.LPAREN)
@@ -989,7 +1005,11 @@ class Parser:
         params: List[VarDecl] = []
         while not self._check(TT.RPAREN):
             vtype = self._consume_type()
-            name = self._expect(TT.IDENT).value
+            tok = self._peek()
+            if tok.type in (TT.IDENT, TT.KEYWORD):
+                name = self._advance().value
+            else:
+                name = self._expect(TT.IDENT).value  # raises ParseError
             params.append(VarDecl(vtype=vtype, name=name))
             if not self._match(TT.COMMA):
                 break

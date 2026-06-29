@@ -1,0 +1,7 @@
+// Iotift Standard Library: i2c
+// I2C communication functions.
+
+extern fn i2cBegin();
+extern fn i2cRead() -> int;
+extern fn i2cWrite(int data);
+extern fn i2cScan();

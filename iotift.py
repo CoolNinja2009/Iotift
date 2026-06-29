@@ -211,6 +211,15 @@ def main() -> None:
         print(f'Parse error: {e}')
         sys.exit(1)
 
+    # ── resolve imports ──
+    try:
+        from import_resolver import ImportResolver
+        resolver = ImportResolver()
+        ast = resolver.resolve(ast, os.path.abspath(args.source))
+    except ImportError as e:
+        print(f'Import error: {e}', file=sys.stderr)
+        sys.exit(1)
+
     # ── dump AST (optional) ──
     if args.ast:
         from pprint import pprint

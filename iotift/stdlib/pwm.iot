@@ -1,0 +1,6 @@
+// Iotift Standard Library: pwm
+// PWM functions for ESP32 (LEDC peripheral).
+
+extern fn pwmSetup(int channel, int freq, int resolution);
+extern fn pwmWrite(int channel, int duty);
+extern fn pwmStop(int channel);

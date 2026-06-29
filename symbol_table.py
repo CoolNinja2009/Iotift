@@ -172,7 +172,12 @@ class SymbolTable:
                **kwargs) -> Symbol:
         """Define a symbol in the current scope."""
         sym = Symbol(name=name, kind=kind, type=type, **kwargs)
-        return self.current_scope.define(sym)
+        try:
+            return self.current_scope.define(sym)
+        except NameError as e:
+            self.error(sym.line, str(e))
+            # Return a placeholder symbol so the caller can continue
+            return sym
 
     def lookup(self, name: str) -> Optional[Symbol]:
         """Look up a symbol from current scope upward."""

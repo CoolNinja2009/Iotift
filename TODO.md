@@ -225,33 +225,33 @@
 
 ---
 
-## MILESTONE 4 — Standard Library & Module System
+## MILESTONE 4 — Standard Library & Module System ✅ **(DONE)**
 
 **Goal:** Working imports. Stdlib available.
 
 ### 4.1 — Import system
-- [ ] `import "file.iot"` — import all top-level symbols
-- [ ] `import { Name1, Name2 } from "file.iot"` — selective import
-- [ ] Resolve path relative to importing file
-- [ ] Prevent circular imports (detect and error)
-- [ ] Merge imported symbols into importer's scope
+- [x] `import "file.iot"` — import all top-level symbols
+- [x] `import { Name1, Name2 } from "file.iot"` — selective import
+- [x] Resolve path relative to importing file
+- [x] Prevent circular imports (detect and error)
+- [x] Merge imported symbols into importer's scope
 
 ### 4.2 — Standard library
-- [ ] `iotift/stdlib/time.iot` — millis, micros, delay, delay_us
-- [ ] `iotift/stdlib/math.iot` — sin, cos, tan, sqrt, abs, pow, floor, ceil, round, log, exp
-- [ ] `iotift/stdlib/gpio.iot` — digital_read, digital_write, toggle, pin_mode
-- [ ] `iotift/stdlib/serial.iot` — print, println, read, available, begin
-- [ ] `iotift/stdlib/i2c.iot` — begin, read, write, scan
-- [ ] `iotift/stdlib/spi.iot` — begin, transfer
-- [ ] `iotift/stdlib/pwm.iot` — setup, write, stop
+- [x] `iotift/stdlib/time.iot` — millis, micros, delay, delay_us
+- [x] `iotift/stdlib/math.iot` — sin, cos, tan, sqrt, abs, pow, floor, ceil, round, log, exp
+- [x] `iotift/stdlib/gpio.iot` — digital_read, digital_write, toggle, pin_mode
+- [x] `iotift/stdlib/serial.iot` — print, println, read, available, begin
+- [x] `iotift/stdlib/i2c.iot` — begin, read, write, scan
+- [x] `iotift/stdlib/spi.iot` — begin, transfer
+- [x] `iotift/stdlib/pwm.iot` — setup, write, stop
 
 ### 4.3 — Auto-import prelude
-- [ ] `time`, `math`, `gpio` auto-imported (available without explicit import)
-- [ ] Others require explicit `import "module"`
+- [x] `time`, `math`, `gpio` auto-imported (available without explicit import)
+- [x] Others require explicit `import "module"`
 
 ### 4.4 — Stdlib tests
-- [ ] `tests/test_imports.py` — import resolution, circular import detection
-- [ ] `tests/test_stdlib.py` — each stdlib function generates correct C
+- [x] `tests/test_imports.py` — import resolution, circular import detection (30 tests)
+- [x] `tests/test_stdlib.py` — each stdlib function generates correct C (19 tests)
 
 ---
 
@@ -519,5 +519,33 @@
   - Hardware integration tests deferred for physical ESP32 availability
 
 ---
+
+### Session 2026-06-29 (Milestone 4 Implementation)
+- Created `import_resolver.py` (~195 lines): AST-level import resolution
+  - `ImportResolver.resolve()` walks AST, finds ImportDecl, inlines declarations
+  - Path resolution: `./` `../` relative, bare name → relative then stdlib
+  - Circular import detection via visited-set tracking
+  - Prelude auto-injection: time, math, gpio imported before user code
+  - `_imported_from` attribute on inlined nodes for diagnostics
+- Extended parser `_parse_import()`: both `import "path"` and `import { A, B } from "path"`
+  - Uses `TT.LBRACE`/`TT.RBRACE` (not OP) — discovered through tokenization debug
+  - Added `from` to KEYWORDS set
+- Fixed `_parse_param_list()`: accepts both IDENT and KEYWORD for param names
+  - Required because `pin`, `output`, etc. are contextual keywords
+- Removed `millis` from KEYWORDS → now an IDENT, usable in `extern fn` declarations
+  - Updated parser's millis check from `TT.KEYWORD` to `TT.IDENT`
+  - Removed `millis` from `_MATH_FUNCTIONS` (it produces `MillisExpr`, not `MathExpr`)
+- Updated `SymbolTable.define()`: catches `NameError` from `Scope.define()` and records
+  as semantic error instead of crashing (fixes duplicate symbol detection from imports)
+- Created `iotift/stdlib/` with 7 `.iot` files: time, math, gpio, serial, i2c, spi, pwm
+  - Each uses `extern fn` declarations + optional `c header` blocks
+  - `math.iot` includes `c header { #include <math.h> }` for automatic header emission
+- Test suite: 270 tests passing (221 original + 49 new)
+  - `tests/test_imports.py` — 30 tests: import-all, selective, path resolution,
+    circular detection (direct + indirect), nested imports, parser syntax, conflicts
+  - `tests/test_stdlib.py` — 19 tests: prelude availability, explicit imports,
+    codegen verification for each stdlib module
+- README updated: M4 status, import docs, pipeline diagram, project structure
+- All existing examples still compile: led.iot, console_rgb.iot, argb.iot
 
 *Last updated: 2026-06-29*

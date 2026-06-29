@@ -77,6 +77,7 @@ python iotift.py blink.iot --flash
   - [Printing](#printing)
   - [Time Literals](#time-literals)
   - [Raw C Injection](#raw-c-injection)
+  - [Imports & Modules](#imports--modules)
 - [💡 Examples](#-examples)
 - [⚙️ CLI Reference](#-cli-reference)
 - [🏗️ Architecture](#-architecture)
@@ -94,7 +95,7 @@ python iotift.py blink.iot --flash
 | **1 — Semantic Analysis** | ✅ Done | Type checking, name resolution, scope analysis, 47 tests |
 | **2 — IR & Optimization** | ✅ Done | Three-address code IR, constant folding, DCE, RSE, 54 tests |
 | **3 — Embedded Improvements** | ✅ Done | Real interrupts, min-heap scheduler, HAL architecture, ISR safety |
-| **4 — Standard Library** | 📋 Planned | Import system, stdlib modules (time, math, gpio, serial, etc.) |
+| **4 — Standard Library** | ✅ Done | Import system, stdlib modules, prelude auto-import, 49 tests |
 | **5 — Tooling** | 📋 Planned | Formatter, linter, polished CLI |
 | **6 — LSP & Editor** | 📋 Planned | VS Code extension, diagnostics, completion, hover |
 | **7 — Multi-Target** | 📋 Planned | STM32, RP2040, nRF52, bare-metal backends, production features |
@@ -142,6 +143,16 @@ python iotift.py blink.iot --flash
     <td>
       <h3>🎚️ LEDC PWM</h3>
       <p>First-class PWM on ESP32 via the LEDC peripheral. <code>pin R = pwm 13; R.setup(5000, 8); R.write(128);</code> — the compiler generates all the <code>ledcSetup</code>/<code>ledcAttachPin</code>/<code>ledcWrite</code> boilerplate.</p>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <h3>\U0001f4e6 Module System</h3>
+      <p><code>import "file.iot"</code> shares code across files. <code>import { sin, cos } from "math"</code> for selective imports. Stdlib modules (time, math, gpio, serial, i2c, spi, pwm) included. Circular import detection built in.</p>
+    </td>
+    <td>
+      <h3>⚡ Auto-Import Prelude</h3>
+      <p><code>time</code>, <code>math</code>, and <code>gpio</code> are auto-imported into every program. <code>millis()</code>, <code>sin()</code>, <code>digitalWrite()</code> — always available without imports.</p>
     </td>
   </tr>
 </table>
@@ -696,7 +707,63 @@ The lexer handles C blocks with full brace-depth tracking — strings, comments
 (both `//` and `/* */`), and nested braces inside `c` blocks are all handled
 correctly.
 
+### Imports & Modules  *(new in Milestone 4)*
+
+Iotift supports importing symbols from other `.iot` files and from the standard library.
+
+#### Import All
+
+Import all top-level symbols from a file:
+
+```iot
+import "utils.iot";       // all symbols from utils.iot are now available
+```
+
+#### Selective Import
+
+Import only specific names:
+
+```iot
+import { sin, cos, PI } from "math";     // only sin, cos, and PI
+import { digitalWrite } from "gpio";     // only digitalWrite
+```
+
+#### Path Resolution
+
+| Path Style | Example | Resolves To |
+|-----------|---------|-------------|
+| Bare name | `"time"` | Relative to importing file, then stdlib directory |
+| Relative | `"./lib.iot"` | Relative to importing file |
+| Parent-relative | `"../shared.iot"` | One directory up from importing file |
+
+#### Prelude (Auto-Import)
+
+Three modules are automatically imported into every Iotift program — no explicit
+`import` needed:
+
+| Module | Provides |
+|--------|----------|
+| `time` | `millis()`, `micros()`, `delay()`, `delay_us()` |
+| `math` | `sin()`, `cos()`, `tan()`, `sqrt()`, `abs()`, `pow()`, `floor()`, `ceil()`, `round()`, `log()`, `exp()` |
+| `gpio` | `digitalRead()`, `digitalWrite()`, `pinMode()`, `toggle()` |
+
+#### Standard Library
+
+Additional modules available via explicit import:
+
+| Module | Import | Key Functions |
+|--------|--------|---------------|
+| serial | `import "serial";` | `serialBegin()`, `serialPrint()`, `serialPrintln()`, `serialRead()` |
+| i2c | `import "i2c";` | `i2cBegin()`, `i2cRead()`, `i2cWrite()`, `i2cScan()` |
+| spi | `import "spi";` | `spiBegin()`, `spiTransfer()` |
+| pwm | `import "pwm";` | `pwmSetup()`, `pwmWrite()`, `pwmStop()` |
+
+> **How it works:** Imports are resolved at the AST level before semantic analysis.
+> The compiler lexes and parses the imported file, then inlines its declarations
+> into your program. Circular imports are detected and reported as errors.
+
 ---
+
 
 ## 💡 Examples
 
@@ -938,28 +1005,24 @@ to specify `--port`.
 .iot source
     │
     ▼
-┌─────────┐  tokens   ┌──────────┐  AST   ┌───────────┐  typed AST
-│  lexer  │ ────────► │  parser  │ ─────► │ semantic  │ ──────────►
-│  .py    │           │  .py     │        │ .py       │
-└─────────┘           └──────────┘        └───────────┘
+┌─────────┐  tokens   ┌──────────┐  AST   ┌────────────────┐  inlined AST
+│  lexer  │ ────────► │  parser  │ ─────► │ import resolver │ ────────────►
+│  .py    │           │  .py     │        │ .py            │
+└─────────┘           └──────────┘        └────────────────┘
                                                  │
     ┌────────────────────────────────────────────┘
     │
     ▼
-┌──────────────┐   IR   ┌───────────────┐  opt IR  ┌──────────────┐  C code
-│ ir_lowering  │ ─────► │ ir_optimizer  │ ───────► │ ir_codegen   │ ──────►
-│ .py          │        │ .py           │          │ .py          │
-│ AST → TAC IR │        │ folds, DCE,   │          │ IR → C/C++   │
-│              │        │ RSE           │          │ (HAL-aware)   │
-└──────────────┘        └───────────────┘          └──────────────┘
+┌───────────┐  typed AST  ┌──────────────┐   IR   ┌───────────────┐  opt IR
+│ semantic  │ ──────────► │ ir_lowering  │ ─────► │ ir_optimizer  │ ───────►
+│ .py       │             │ .py          │        │ .py           │
+└───────────┘             └──────────────┘        └───────────────┘
                                                           │
                                                           ▼
-                                                  ┌──────────────┐
-                                                  │ PlatformIO    │
-                                                  │ build & flash │
-                                                  │ (optional)    │
+                                                  ┌──────────────┐  C code
+                                                  │ ir_codegen   │ ──────►
+                                                  │ .py          │
                                                   └──────────────┘
-```
 
 ### Key Design Decisions
 
@@ -994,6 +1057,11 @@ to specify `--port`.
    minimal IRAM ISR that sets a `volatile bool` flag. The user body runs
    safely in `loop()` with optional debounce applied in the handler.
 
+8. **AST-level imports.** `import "file.iot"` and `import { Name } from "..."`
+   are resolved before semantic analysis by inlining the imported file's AST
+   declarations. Circular imports are detected. The prelude (time, math, gpio)
+   is auto-imported into every file.
+
 ---
 
 ## 🎯 Supported Target
@@ -1019,6 +1087,7 @@ Iotift/
 ├── semantic.py         # Semantic analyzer: type checking, scope resolution
 ├── symbol_table.py     # Hierarchical symbol table with scoping
 ├── type_system.py      # Type definitions and checking rules
+├── import_resolver.py  # Import resolution: path lookup, inlining, circular detection
 │
 ├── ir.py               # IR: three-address code instruction set
 ├── ir_lowering.py      # IR lowering: AST → IR translation
@@ -1031,13 +1100,25 @@ Iotift/
 │   ├── base.py         # HALBase abstract class
 │   └── esp32_arduino.py# ESP32 Arduino HAL implementation
 │
-├── tests/              # Test suite (221 tests)
+├── iotift/             # Iotift package
+│   └── stdlib/         # Standard library (.iot files)
+│       ├── time.iot    #   millis, micros, delay, delay_us
+│       ├── math.iot    #   sin, cos, tan, sqrt, abs, pow, ...
+│       ├── gpio.iot    #   digitalRead, digitalWrite, pinMode, toggle
+│       ├── serial.iot  #   serialBegin, serialPrint, serialRead
+│       ├── i2c.iot     #   i2cBegin, i2cRead, i2cWrite, i2cScan
+│       ├── spi.iot     #   spiBegin, spiTransfer
+│       └── pwm.iot     #   pwmSetup, pwmWrite, pwmStop
+│
+├── tests/              # Test suite (270 tests)
 │   ├── test_lexer.py   # 29 tests
 │   ├── test_parser.py  # 41 tests
 │   ├── test_codegen.py # 14 tests
 │   ├── test_semantic.py# 65 tests
 │   ├── test_ir.py      # 54 tests
-│   └── test_hal.py     # 18 tests
+│   ├── test_hal.py     # 18 tests
+│   ├── test_imports.py # 30 tests  (new)
+│   └── test_stdlib.py  # 19 tests  (new)
 │
 ├── examples/           # Example .iot programs
 │   ├── led.iot         #   RGB LED PWM fader

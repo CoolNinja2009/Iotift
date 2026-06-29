@@ -47,8 +47,9 @@ class SchedulerConfig(Node):
 
 @dataclass
 class ImportDecl(Node):
-    """import "file.iot";"""
+    """import "file.iot";  or  import { Name1, Name2 } from "file.iot";"""
     path: str = ''
+    selected_names: Optional[List[str]] = None  # None = import all
 
 
 # ─────────────────────────────────────────

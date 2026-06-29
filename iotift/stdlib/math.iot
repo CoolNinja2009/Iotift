@@ -1,0 +1,18 @@
+// Iotift Standard Library: math
+// Math functions. The c header block ensures <math.h> is included.
+
+c header {
+    #include <math.h>
+}
+
+extern fn sin(float x) -> float;
+extern fn cos(float x) -> float;
+extern fn tan(float x) -> float;
+extern fn sqrt(float x) -> float;
+extern fn abs(float x) -> float;
+extern fn pow(float base, float exp) -> float;
+extern fn floor(float x) -> float;
+extern fn ceil(float x) -> float;
+extern fn round(float x) -> float;
+extern fn log(float x) -> float;
+extern fn exp(float x) -> float;

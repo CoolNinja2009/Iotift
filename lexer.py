@@ -83,7 +83,7 @@ KEYWORDS = frozenset({
     # Pin events (contextual — both intuitive and technical names coexist)
     'rising', 'falling', 'change', 'press', 'release',
     # Other
-    'import', 'print', 'println', 'sizeof', 'millis',
+    'import', 'from', 'print', 'println', 'sizeof',
     # Scheduler / timer extensions
     'offset', 'config',
 })

@@ -1,0 +1,8 @@
+// Iotift Standard Library: serial
+// Serial/UART communication functions.
+
+extern fn serialBegin(int baud);
+extern fn serialPrint(str msg);
+extern fn serialPrintln(str msg);
+extern fn serialRead() -> int;
+extern fn serialAvailable() -> int;

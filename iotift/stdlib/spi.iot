@@ -1,0 +1,5 @@
+// Iotift Standard Library: spi
+// SPI communication functions.
+
+extern fn spiBegin();
+extern fn spiTransfer(int data) -> int;
