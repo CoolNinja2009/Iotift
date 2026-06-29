@@ -1,11 +1,12 @@
 """
-IOTIFT AST Nodes - Pure dataclass definitions only.
-No logic, no imports beyond dataclasses and typing.
-Every construct in the language maps to one of these dataclasses.
+IOTIFT AST Nodes — Milestone 0 working set (~35 node types).
+
+Every language construct maps to exactly one dataclass here.
+Zero logic, zero imports beyond stdlib.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Tuple
 
 
 # ─────────────────────────────────────────
@@ -14,7 +15,11 @@ from typing import Optional, List, Any
 
 @dataclass
 class Node:
+    """Base node carrying source span for error reporting."""
     line: int = field(default=0, repr=False)
+    col: int = field(default=0, repr=False)
+    end_line: int = field(default=0, repr=False)
+    end_col: int = field(default=0, repr=False)
 
 
 # ─────────────────────────────────────────
@@ -23,19 +28,40 @@ class Node:
 
 @dataclass
 class Program(Node):
+    """Root node — holds every top-level declaration."""
     body: List[Node] = field(default_factory=list)
 
+
 @dataclass
-class DeviceDecl(Node):       # @device esp32
+class DeviceDecl(Node):
+    """@device esp32"""
     name: str = ''
 
-@dataclass
-class ImportDecl(Node):       # import "file.iot";
-    path: str = ''
 
 @dataclass
-class CBlockNode(Node):       # c <scope> { ... }
-    scope: str = ''           # header | global | setup | loop
+class SchedulerConfig(Node):
+    """@config scheduler_slots = 16;"""
+    key: str = ''          # 'scheduler_slots'
+    value: Any = None      # e.g. 16
+
+
+@dataclass
+class ImportDecl(Node):
+    """import "file.iot";"""
+    path: str = ''
+
+
+# ─────────────────────────────────────────
+#  RAW C INJECTION
+# ─────────────────────────────────────────
+
+@dataclass
+class CBlockNode(Node):
+    """
+    c <scope> { ... }
+    scope is one of: header | global | setup | loop | isr
+    """
+    scope: str = ''
     code: str = ''
 
 
@@ -44,44 +70,109 @@ class CBlockNode(Node):       # c <scope> { ... }
 # ─────────────────────────────────────────
 
 @dataclass
-class PinDecl(Node):          # pin LED = output 12;
-    name       : str = ''
-    direction  : str = ''     # output | input | analog | i2c | spi | pwm
-    number     : int = 0
-    pwm_freq   : Optional[int] = None
+class PinConfig(Node):
+    """Configuration for a pin declaration."""
+    pull: Optional[str] = None        # 'up' | 'down' | 'none'
+    debounce_ms: Optional[int] = None
+    initial: Optional[Any] = None     # initial output value
+
+
+@dataclass
+class PinDecl(Node):
+    """
+    pin LED = output 2;
+    pin BTN = input 5 { pull: up, debounce: 50ms };
+    pin R   = pwm 13 freq 5000 resolution 8;
+    """
+    name: str = ''
+    direction: str = ''          # output | input | analog | i2c | spi | pwm
+    number: int = 0
+    config: PinConfig = field(default_factory=PinConfig)
+    pwm_freq: Optional[int] = None
     pwm_resolution: Optional[int] = None
 
-@dataclass
-class VarDecl(Node):          # int count = 0;
-    vtype   : str = ''        # int | float | bool | str
-    name    : str = ''
-    init    : Optional[Any] = None
-    is_const: bool = False
 
 @dataclass
-class StructDecl(Node):       # struct Sensor { ... }
-    name  : str = ''
+class VarDecl(Node):
+    """
+    int count = 0;               // old-style (vtype required)
+    let count = 0;               // new-style immutable, type inferred
+    var temp: f32 = 25.5;        // new-style mutable, explicit type
+    const MAX_TEMP = 100;        // compile-time constant
+    """
+    name: str = ''
+    vtype: Optional[str] = None        # type annotation (may be None for let inference)
+    init: Any = None                   # initializer expression
+    is_const: bool = False             # compile-time constant
+    is_mutable: bool = True            # let (false) vs var/old-style (true)
+    is_volatile: bool = False          # volatile qualifier
+
+
+@dataclass
+class ArrayDecl(Node):
+    """int vals[10];   or   let readings: [10]i16;"""
+    name: str = ''
+    vtype: Optional[str] = None
+    elem_type: Optional[str] = None
+    size: int = 0
+    init: Optional[Any] = None
+    is_mutable: bool = True
+
+
+@dataclass
+class StructDecl(Node):
+    """
+    struct Sensor {
+        id: u32,
+        value: f32,
+    }
+    """
+    name: str = ''
     fields: List[VarDecl] = field(default_factory=list)
 
-@dataclass
-class FnDecl(Node):           # fn blink(int times) { ... }
-    name       : str = ''
-    params     : List[VarDecl] = field(default_factory=list)
-    return_type: Optional[str] = None
-    body       : List[Node] = field(default_factory=list)
-    is_void    : bool = True
 
 @dataclass
-class ExternFnDecl(Node):     # extern fn esp_restart();
-    name       : str = ''
-    params     : List[VarDecl] = field(default_factory=list)
+class FnDecl(Node):
+    """
+    fn blink(times: u32) -> bool { ... }
+    isr fn on_timer() { ... }
+    """
+    name: str = ''
+    params: List[VarDecl] = field(default_factory=list)
     return_type: Optional[str] = None
+    body: List[Node] = field(default_factory=list)
+    is_void: bool = True
+    is_extern: bool = False
+    is_isr: bool = False
+
 
 @dataclass
-class ArrayDecl(Node):        # int vals[10];
-    vtype: str = ''
-    name : str = ''
-    size : int = 0
+class ExternFnDecl(Node):
+    """extern fn esp_restart();"""
+    name: str = ''
+    params: List[VarDecl] = field(default_factory=list)
+    return_type: Optional[str] = None
+
+
+@dataclass
+class EnumDecl(Node):
+    """
+    enum Mode {
+        WarmWhite,
+        Rainbow = 5,
+        Breathing,
+    }
+    """
+    name: str = ''
+    variants: List[Tuple[str, Optional[int]]] = field(default_factory=list)
+    backing_type: Optional[str] = None   # e.g. 'u8'
+
+
+@dataclass
+class TypeAliasDecl(Node):
+    """type Celsius = f32;"""
+    name: str = ''
+    aliased_type: str = ''
 
 
 # ─────────────────────────────────────────
@@ -89,31 +180,88 @@ class ArrayDecl(Node):        # int vals[10];
 # ─────────────────────────────────────────
 
 @dataclass
-class OnEvent(Node):          # on BTN.press { ... }
-    pin  : str = ''
-    event: str = ''           # press | release | change
-    body : List[Node] = field(default_factory=list)
+class OnEvent(Node):
+    """
+    on BTN.press { ... }
+    on BTN.rising { ... }
+    on BTN.falling { ... }
+    on BTN.change { ... }
+    """
+    pin: str = ''
+    event: str = ''            # press | release | change | rising | falling
+    body: List[Node] = field(default_factory=list)
+
 
 @dataclass
-class OnThreshold(Node):      # on TEMP > 50.0 { ... }
-    pin  : str = ''
-    op   : str = ''
+class OnThreshold(Node):
+    """
+    on TEMP > 50.0 { ... }
+    Polled analog threshold check.
+    """
+    pin: str = ''
+    op: str = ''               # > | < | >= | <= | ==
     value: Any = None
-    body : List[Node] = field(default_factory=list)
-
-@dataclass
-class EveryBlock(Node):       # every 1000 { ... }  /  every 1000 as ticker { ... }
-    interval: int = 0         # ms
-    label   : Optional[str] = None
-    body    : List[Node] = field(default_factory=list)
-
-@dataclass
-class LoopBlock(Node):        # loop { ... }
     body: List[Node] = field(default_factory=list)
 
+
 @dataclass
-class VoidLoop(Node):         # void loop() { ... }
+class EveryBlock(Node):
+    """
+    every 500ms { ... }
+    every 1s as blinker { ... }
+    every 1s offset 100ms { ... }
+    """
+    interval: int = 0          # milliseconds
+    label: Optional[str] = None
     body: List[Node] = field(default_factory=list)
+    offset_ms: Optional[int] = None   # optional first-fire delay offset
+
+
+@dataclass
+class LoopBlock(Node):
+    """loop { ... }  —  infinite loop (generates while(1))."""
+    body: List[Node] = field(default_factory=list)
+
+
+@dataclass
+class VoidLoop(Node):
+    """void loop() { ... }  —  DEPRECATED, use tick { ... }."""
+    body: List[Node] = field(default_factory=list)
+
+
+@dataclass
+class TickBlock(Node):
+    """
+    tick { ... }  —  run on each main loop iteration.
+    Replaces the deprecated `void loop()`.
+    """
+    body: List[Node] = field(default_factory=list)
+
+
+@dataclass
+class AfterBlock(Node):
+    """
+    after 5s { ... }  —  one-shot timer block.
+    Fires once after the given delay, then never again.
+    """
+    interval: int = 0          # milliseconds
+    body: List[Node] = field(default_factory=list)
+
+
+# ─────────────────────────────────────────
+#  PERIPHERAL DECLARATIONS
+# ─────────────────────────────────────────
+
+@dataclass
+class PeripheralDecl(Node):
+    """
+    i2c bus0 { sda: 21, scl: 22, speed: 100kHz };
+    spi bus0 { mosi: 23, miso: 19, sck: 18, speed: 10MHz };
+    uart serial1 { tx: 17, rx: 16, baud: 9600 };
+    """
+    periph_type: str = ''        # 'i2c' | 'spi' | 'uart'
+    name: str = ''               # 'bus0', 'serial1'
+    config: dict = field(default_factory=dict)
 
 
 # ─────────────────────────────────────────
@@ -121,82 +269,101 @@ class VoidLoop(Node):         # void loop() { ... }
 # ─────────────────────────────────────────
 
 @dataclass
-class Assign(Node):           # count = 10;   LED = 1;
-    target: Any = ''          # str or ArrayAccess
-    value : Any = None
+class Assign(Node):
+    """
+    count = 10;
+    LED = 1;
+    target is str, ArrayAccess, or MemberAccess.
+    """
+    target: Any = ''             # str | ArrayAccess | MemberAccess
+    value: Any = None
+
 
 @dataclass
-class AssignAfter(Node):      # LED = 0 after 200;
+class AssignAfter(Node):
+    """LED = 0 after 200;"""
     target: str = ''
-    value : Any = None
-    delay : int = 0
+    value: Any = None
+    delay: int = 0
+
 
 @dataclass
-class CompoundAssign(Node):   # count += 1;
+class CompoundAssign(Node):
+    """count += 1;   /   total -= 5;"""
     target: str = ''
-    op    : str = ''          # += -= *= /=
-    value : Any = None
+    op: str = ''                # += | -= | *= | /= | %= | &= | |= | ^=
+    value: Any = None
+
 
 @dataclass
 class IfStmt(Node):
-    condition   : Any = None
-    then_body   : List[Node] = field(default_factory=list)
-    elif_clauses: List[tuple] = field(default_factory=list)  # [(cond, body), ...]
-    else_body   : Optional[List[Node]] = None
+    """if (cond) { ... } else if (cond) { ... } else { ... }"""
+    condition: Any = None
+    then_body: List[Node] = field(default_factory=list)
+    elif_clauses: List[Tuple[Any, List[Node]]] = field(default_factory=list)
+    else_body: Optional[List[Node]] = None
+
 
 @dataclass
 class WhileStmt(Node):
+    """while (cond) { ... }"""
     condition: Any = None
-    body     : List[Node] = field(default_factory=list)
+    body: List[Node] = field(default_factory=list)
+
 
 @dataclass
 class ForStmt(Node):
-    init     : Optional[Node] = None
+    """for (let i = 0; i < 10; i += 1) { ... }"""
+    init: Optional[Node] = None
     condition: Any = None
-    step     : Optional[Node] = None
-    body     : List[Node] = field(default_factory=list)
+    step: Optional[Node] = None
+    body: List[Node] = field(default_factory=list)
+
 
 @dataclass
 class ReturnStmt(Node):
+    """return;  /  return expr;"""
     value: Any = None
+
 
 @dataclass
 class BreakStmt(Node):
+    """break;"""
     pass
+
 
 @dataclass
 class ContinueStmt(Node):
+    """continue;"""
     pass
 
+
 @dataclass
-class StopStmt(Node):         # stop ticker;
+class StopStmt(Node):
+    """stop blinker;  —  halts a named every-block."""
     label: str = ''
 
+
 @dataclass
-class PrintStmt(Node):        # print("hello");
+class PrintStmt(Node):
+    """
+    print("hello");
+    println("done");
+    """
     value: Any = None
+    newline: bool = True
+
 
 @dataclass
-class FnCall(Node):           # esp_restart();  blink(3);
-    name: str = ''
-    args: List[Any] = field(default_factory=list)
+class DeferStmt(Node):
+    """defer { cleanup(); }  —  run when exiting current block."""
+    body: List[Node] = field(default_factory=list)
+
 
 @dataclass
-class MethodCall(Node):       # obj.method(args)  — proper node, not string hack
-    obj   : str = ''
-    method: str = ''
-    args  : List[Any] = field(default_factory=list)
-
-@dataclass
-class PwmSetup(Node):         # LED.setup(5000, 8);
-    pin       : str = ''
-    freq      : Any = None    # expression
-    resolution: Any = None    # expression
-
-@dataclass
-class PwmWrite(Node):         # LED.write(128);
-    pin  : str = ''
-    value: Any = None
+class ExprStmt(Node):
+    """Bare expression as statement: fn_call();"""
+    expr: Any = None
 
 
 # ─────────────────────────────────────────
@@ -204,40 +371,98 @@ class PwmWrite(Node):         # LED.write(128);
 # ─────────────────────────────────────────
 
 @dataclass
-class BinOp(Node):            # a + b,  count == 10
-    left : Any = None
-    op   : str = ''
+class BinOp(Node):
+    """a + b,  count == 10,  flag && ready"""
+    left: Any = None
+    op: str = ''
     right: Any = None
 
+
 @dataclass
-class UnaryOp(Node):          # !flag,  -x
-    op     : str = ''
+class UnaryOp(Node):
+    """!flag,  -x,  ~mask"""
+    op: str = ''
     operand: Any = None
 
-@dataclass
-class MemberAccess(Node):     # temp.value
-    obj   : str = ''
-    member: str = ''
 
 @dataclass
-class ArrayAccess(Node):      # vals[0]
-    name : str = ''
+class MemberAccess(Node):
+    """temp.value   /   sensor.id"""
+    obj: Any = ''               # str or nested expression
+    member: str = ''
+
+
+@dataclass
+class ArrayAccess(Node):
+    """vals[0]   /   readings[i + 1]"""
+    name: str = ''              # array variable name
     index: Any = None
+
 
 @dataclass
 class Literal(Node):
-    vtype: str = ''           # int | float | bool | str
+    """42, 3.14, "hello", true, 'A'"""
+    vtype: str = ''             # int | float | bool | str | char | u8 | i32 | ...
     value: Any = None
+
 
 @dataclass
 class Identifier(Node):
+    """Bare variable/function reference."""
     name: str = ''
 
+
 @dataclass
-class MillisExpr(Node):       # millis()
+class FnCall(Node):
+    """blink(3);   /   sensor.read();"""
+    name: str = ''               # or dotted path like "sensor.read"
+    args: List[Any] = field(default_factory=list)
+
+
+@dataclass
+class MethodCall(Node):
+    """obj.method(args)  —  generic method dispatch."""
+    obj: Any = None              # expression
+    method: str = ''
+    args: List[Any] = field(default_factory=list)
+
+
+@dataclass
+class PwmSetup(Node):
+    """R.setup(freq, resolution);"""
+    pin: str = ''
+    freq: Any = None
+    resolution: Any = None
+
+
+@dataclass
+class PwmWrite(Node):
+    """R.write(duty);"""
+    pin: str = ''
+    value: Any = None
+
+
+@dataclass
+class MillisExpr(Node):
+    """millis()  —  returns ms since boot."""
     pass
+
 
 @dataclass
 class MathExpr(Node):
+    """sin(x),  pow(base, exp),  sqrt(val)  —  via stdlib."""
     func: str = ''
     args: List[Any] = field(default_factory=list)
+
+
+@dataclass
+class CastExpr(Node):
+    """value as u8   /   temp as i32"""
+    expr: Any = None
+    target_type: str = ''
+
+
+@dataclass
+class SizeOfExpr(Node):
+    """sizeof(i32)  /  sizeof(my_var)"""
+    target: Any = None           # type name str or expression

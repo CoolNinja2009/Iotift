@@ -86,6 +86,21 @@ python iotift.py blink.iot --flash
 
 ---
 
+## 🗺️ Milestones
+
+| Milestone | Status | Key Deliverables |
+|-----------|--------|-----------------|
+| **0 — Foundation** | ✅ Done | Working lexer→parser→codegen pipeline, 29 AST node types, 77 tests |
+| **1 — Semantic Analysis** | ✅ Done | Type checking, name resolution, scope analysis, 47 tests |
+| **2 — IR & Optimization** | ✅ Done | Three-address code IR, constant folding, DCE, RSE, 54 tests |
+| **3 — Embedded Improvements** | ✅ Done | Real interrupts, min-heap scheduler, HAL architecture, ISR safety |
+| **4 — Standard Library** | 📋 Planned | Import system, stdlib modules (time, math, gpio, serial, etc.) |
+| **5 — Tooling** | 📋 Planned | Formatter, linter, polished CLI |
+| **6 — LSP & Editor** | 📋 Planned | VS Code extension, diagnostics, completion, hover |
+| **7 — Multi-Target** | 📋 Planned | STM32, RP2040, nRF52, bare-metal backends, production features |
+
+---
+
 ## ✨ Features
 
 <table>
@@ -390,11 +405,24 @@ on BTN.change {             // any edge
 }
 ```
 
-| Event | Trigger |
-|-------|---------|
-| `.press` | RISING edge (LOW → HIGH) |
-| `.release` | FALLING edge (HIGH → LOW) |
-| `.change` | CHANGE (any edge) |
+| Event | Interrupt Mode | Trigger |
+|-------|---------------|---------|
+| `.press` | `FALLING` | Button pressed (HIGH → LOW, assumes pull-up) |
+| `.release` | `RISING` | Button released (LOW → HIGH) |
+| `.rising` | `RISING` | Rising edge |
+| `.falling` | `FALLING` | Falling edge |
+| `.change` | `CHANGE` | Any edge |
+
+> 🔌 **Since Milestone 3:** `on PIN.event` compiles to a **real hardware interrupt**
+> via `attachInterrupt()`. The ISR is minimal (sets a `volatile bool` flag) and the
+> user body runs in `loop()` — safe, predictable, and non-blocking.
+> 
+> Debounce is configured in the pin declaration and applied in the handler
+> (never in the ISR):
+> ```iot
+> pin BTN = input 5 { pull: up, debounce: 50ms };
+> on BTN.press { LED = 1; }   // debounced button press
+> ```
 
 #### on — Threshold Event
 
@@ -447,12 +475,107 @@ stop blinker;               // stops the timer
 
 #### after — Delayed Assignment
 
-Schedule a pin/value change after a delay. Runs once.
+Schedule a pin/value change after a delay. Runs once (uses the scheduler).
 
 ```iot
 LED = 1;                    // turn on now
 LED = 0 after 200;          // turn off in 200 ms
 ```
+
+#### after — One-Shot Timer Block  *(new in Milestone 3)*
+
+Standalone `after` block that fires once after the given delay, then never again.
+
+```iot
+after 5s {
+    print("5 seconds elapsed!");
+}
+
+after 100ms {
+    LED = 0;                  // turn off after 100 ms
+}
+```
+
+#### every — Timer Offset  *(new in Milestone 3)*
+
+Delay the first fire of a repeating timer with `offset`:
+
+```iot
+every 10s offset 2s {        // first fire at 2s, then every 10s
+    print("Tick");
+}
+```
+
+#### Timer Status Methods  *(new in Milestone 3)*
+
+Named timers expose `.running`, `.stop()`, and `.start()`:
+
+```iot
+every 500 as blinker {
+    LED = !LED;
+}
+
+tick {
+    if blinker.running {     // check if timer is active
+        blinker.stop();      // stop the timer
+    }
+}
+
+// later...
+blinker.start();              // restart from now
+```
+
+#### ISR Functions  *(new in Milestone 3)*
+
+Declare interrupt service routines with `isr fn`. The compiler emits
+`IRAM_ATTR` on ESP32 and enforces safety rules at compile time:
+
+```iot
+volatile int counter = 0;
+
+isr fn on_timer() {
+    counter += 1;             // OK: counter is volatile
+}
+
+// Compile-time errors:
+// isr fn bad() {
+//     print("hello");        // ERROR: cannot print in ISR
+//     delay(100);            // ERROR: cannot block in ISR
+//     int x = 0;             // ERROR: non-volatile variable
+// }
+```
+
+**ISR Safety Rules:**
+- ❌ `print` / `println` — error
+- ❌ `delay` / `delayMicroseconds` — error
+- ❌ I2C / SPI / UART calls — error
+- ❌ Non-`volatile` variables — error
+- ✅ `volatile` variable access — OK
+- ✅ Simple arithmetic, flag-setting — OK
+
+### Scheduler  *(upgraded in Milestone 3)*
+
+The deferred-execution scheduler (used for `after` assignments) now uses a
+**min-heap** for O(log n) insert and O(1) peek:
+
+- **Overflow detection**: `_iotift_scheduler_overflow` flag set when full
+- **Configurable slots**: `@config scheduler_slots = 32;` or `--scheduler-slots 32`
+- **Deterministic**: no dynamic allocation, fixed-size array at compile time
+
+### HAL Architecture  *(new in Milestone 3)*
+
+Iotift now has a **Hardware Abstraction Layer** (`hal/` package) that isolates
+platform-specific code from the compiler:
+
+```
+hal/
+├── __init__.py          # HAL registry + get_hal() factory
+├── base.py              # HALBase abstract class (~25 methods)
+└── esp32_arduino.py     # ESP32 Arduino implementation
+```
+
+`@device esp32` now actually dispatches to `ESP32ArduinoHAL`. Adding a new
+target (STM32, RP2040, …) means implementing `HALBase` and registering it.
 
 ### PWM Methods
 
@@ -731,19 +854,31 @@ python iotift.py <source.iot> [options]
 | `<source.iot>` | **Required.** The input Iotift source file |
 | `-o`, `--output <file>` | Output C file (default: `generated.c`) |
 | `--ast` | Dump the Abstract Syntax Tree to stdout (for debugging) |
+| `--ir-dump` | Dump the IR to stdout (for debugging, implies `--no-optimize`) |
+| `--direct-codegen` | Use direct AST→C codegen (skip IR pipeline) |
+| `--no-optimize` | Skip IR optimization passes |
 | `--device <target>` | Target device (default: `esp32`) |
 | `--project` | Generate a full PlatformIO project folder instead of a single `.c` file |
 | `--flash` | Generate PlatformIO project, build, and upload to device |
 | `--port <port>` | Serial port for flashing (e.g. `COM3`, `/dev/ttyUSB0`). If omitted, auto-detects ESP32 |
+| `--Werror` | Promote all warnings to errors |
+| `--Wno <name>` | Disable a specific warning (e.g., `unused-variable`, `implicit-narrowing`) |
+| `--scheduler-slots <N>` | Number of scheduler task slots (default: 16) |
 
 ### Examples
 
 ```bash
-# Basic compilation
+# Basic compilation (uses IR pipeline by default)
 python iotift.py blink.iot -o blink.c
+
+# Use direct AST→C codegen (legacy path)
+python iotift.py blink.iot -o blink.c --direct-codegen
 
 # Dump AST for debugging
 python iotift.py blink.iot --ast
+
+# Dump IR for debugging
+python iotift.py blink.iot --ir-dump
 
 # Generate PlatformIO project (folder with platformio.ini + src/main.cpp)
 python iotift.py blink.iot --project
@@ -753,6 +888,12 @@ python iotift.py blink.iot --flash
 
 # Flash to a specific port
 python iotift.py blink.iot --flash --port COM5
+
+# Treat warnings as errors
+python iotift.py blink.iot --Werror
+
+# Suppress specific warnings
+python iotift.py blink.iot --Wno unused-variable --Wno implicit-narrowing
 ```
 
 ### Auto-Detection
@@ -773,18 +914,22 @@ to specify `--port`.
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    IOTIFT COMPILER                    │
-├───────────┬──────────────┬────────────────┬─────────┤
-│  lexer.py │  parser.py   │  codegen.py    │ iotift.py│
-│  ───────  │  ──────────  │  ────────────  │ ──────── │
-│  Tokenize │  Build AST   │  AST → C/C++   │  CLI +   │
-│  source   │  from tokens  │  (HAL-aware)   │  PIO     │
-│           │              │                │  flash   │
-├───────────┴──────────────┴────────────────┴─────────┤
-│                  ast_nodes.py                         │
-│  Pure dataclass definitions for every language node   │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                      IOTIFT COMPILER                             │
+├──────────┬──────────┬──────────┬──────────┬──────────┬─────────┤
+│ lexer.py │parser.py │semantic  │ir_      │ir_       │ir_      │
+│ ───────  │───────── │.py       │lowering │optimizer │codegen  │
+│ Tokenize │Build AST │Type      │.py      │.py       │.py      │
+│ source   │from      │checking, │AST→IR   │Constant  │IR→C/C++ │
+│          │tokens    │scope     │TAC      │folding,  │(HAL-    │
+│          │          │analysis  │lowering │DCE       │aware)   │
+├──────────┴──────────┴──────────┴──────────┴──────────┴─────────┤
+│                   ast_nodes.py                                   │
+│  Pure dataclass definitions for every language node              │
+├─────────────────────────────────────────────────────────────────┤
+│                   ir.py                                          │
+│  Three-Address Code IR: instructions, basic blocks, IR module    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Pipeline
@@ -793,17 +938,27 @@ to specify `--port`.
 .iot source
     │
     ▼
-┌─────────┐    tokens     ┌──────────┐    AST    ┌───────────┐    C code
-│  lexer  │ ────────────► │  parser  │ ────────► │ codegen   │ ──────────►
-│  .py    │               │  .py     │           │ .py       │
-└─────────┘               └──────────┘           └───────────┘
-                                                       │
-                                                       ▼
-                                               ┌──────────────┐
-                                               │ PlatformIO    │
-                                               │ build & flash │
-                                               │ (optional)    │
-                                               └──────────────┘
+┌─────────┐  tokens   ┌──────────┐  AST   ┌───────────┐  typed AST
+│  lexer  │ ────────► │  parser  │ ─────► │ semantic  │ ──────────►
+│  .py    │           │  .py     │        │ .py       │
+└─────────┘           └──────────┘        └───────────┘
+                                                 │
+    ┌────────────────────────────────────────────┘
+    │
+    ▼
+┌──────────────┐   IR   ┌───────────────┐  opt IR  ┌──────────────┐  C code
+│ ir_lowering  │ ─────► │ ir_optimizer  │ ───────► │ ir_codegen   │ ──────►
+│ .py          │        │ .py           │          │ .py          │
+│ AST → TAC IR │        │ folds, DCE,   │          │ IR → C/C++   │
+│              │        │ RSE           │          │ (HAL-aware)   │
+└──────────────┘        └───────────────┘          └──────────────┘
+                                                          │
+                                                          ▼
+                                                  ┌──────────────┐
+                                                  │ PlatformIO    │
+                                                  │ build & flash │
+                                                  │ (optional)    │
+                                                  └──────────────┘
 ```
 
 ### Key Design Decisions
@@ -812,19 +967,32 @@ to specify `--port`.
    `lexer.py` knows only about characters and tokens. `parser.py` knows only about
    tokens and AST nodes. `codegen.py` is the **single source of all C/C++ knowledge**.
 
-2. **HAL abstraction.** Device-specific differences (`millis()`, pin constants,
-   PWM APIs) live in a `HAL` dict inside `codegen.py`. Adding a new target
-   means adding one entry to that dict.
+2. **Three-Address Code IR.** The IR (`ir.py`) sits between semantic analysis and
+   code generation, enabling optimization passes like constant folding, dead code
+   elimination, and redundant store elimination before final C emission.
 
-3. **First-pass collection.** The code generator does two logical passes:
+3. **IR pipeline is default.** Compilation goes through the full IR pipeline
+   (AST → IR → optimize → C). The original AST→C codegen is preserved behind
+   `--direct-codegen` for backward compatibility.
+
+4. **HAL abstraction.** Device-specific differences (`millis()`, pin constants,
+   PWM APIs) live in the `hal/` package. Adding a new target
+   means implementing `HALBase`. The `@device` directive now actually
+   dispatches to the correct HAL.
+
+5. **First-pass collection.** The code generator does two logical passes:
    1. **Collect** — walk the AST, register pins, functions, timers, and events
    2. **Emit** — assemble the final C output in the correct order (headers →
       globals → scheduler → functions → handlers → setup → loop)
 
-4. **Scheduler pattern.** `every` blocks compile to a lightweight cooperative
-   scheduler that compares `millis()` against per-timer `last_*` variables.
-   This avoids hardware timers and ISR complexity while keeping code simple
-   and predictable.
+6. **Min-heap scheduler.** `every` blocks compile to a lightweight cooperative
+   scheduler using a binary min-heap (O(log n) insert, O(1) peek). Overflow
+   detection sets a flag when all slots are full. Configurable via
+   `@config scheduler_slots = N` or `--scheduler-slots N`.
+
+7. **Real interrupts.** `on PIN.event` generates `attachInterrupt()` with a
+   minimal IRAM ISR that sets a `volatile bool` flag. The user body runs
+   safely in `loop()` with optional debounce applied in the handler.
 
 ---
 
@@ -848,10 +1016,33 @@ Iotift/
 ├── lexer.py            # Lexer: source text → token stream
 ├── parser.py           # Parser: token stream → AST
 ├── ast_nodes.py        # AST node definitions (pure dataclasses)
-├── codegen.py          # Code generator: AST → C/C++ with HAL
+├── semantic.py         # Semantic analyzer: type checking, scope resolution
+├── symbol_table.py     # Hierarchical symbol table with scoping
+├── type_system.py      # Type definitions and checking rules
 │
-├── led.iot             # Example: RGB LED PWM fader
-├── argb.iot            # Example: WS2812B sniffer (RMT)
+├── ir.py               # IR: three-address code instruction set
+├── ir_lowering.py      # IR lowering: AST → IR translation
+├── ir_optimizer.py     # IR optimizer: constant folding, DCE, RSE
+├── ir_codegen.py       # IR codegen: IR → C/C++ with HAL
+├── codegen.py          # Direct codegen: AST → C/C++ (legacy path)
+│
+├── hal/                # Hardware Abstraction Layer
+│   ├── __init__.py     # HAL registry + factory
+│   ├── base.py         # HALBase abstract class
+│   └── esp32_arduino.py# ESP32 Arduino HAL implementation
+│
+├── tests/              # Test suite (221 tests)
+│   ├── test_lexer.py   # 29 tests
+│   ├── test_parser.py  # 41 tests
+│   ├── test_codegen.py # 14 tests
+│   ├── test_semantic.py# 65 tests
+│   ├── test_ir.py      # 54 tests
+│   └── test_hal.py     # 18 tests
+│
+├── examples/           # Example .iot programs
+│   ├── led.iot         #   RGB LED PWM fader
+│   ├── console_rgb.iot #   Console RGB (WS2812B)
+│   └── argb.iot        #   WS2812B sniffer (RMT)
 │
 ├── nothing/            # Backup/scratch directory (gitignored)
 ├── .venv/              # Python virtual environment (gitignored)

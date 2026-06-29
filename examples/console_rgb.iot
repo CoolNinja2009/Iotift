@@ -1,0 +1,337 @@
+@device esp32
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║     CONSOLE RGB  —  Multi-Mode LED Controller              ║
+// ║     ESP32  |  PWM LEDC  |  Button UI  |  Serial Console     ║
+// ╚══════════════════════════════════════════════════════════════╝
+//
+//   A non-blocking, event-driven RGB lighting controller with
+//   six animation modes, a pushbutton interface, and a serial
+//   console for real-time control.
+//
+//   WIRING
+//   ──────
+//   GPIO 13  ───▶  Red   LED channel  (PWM, 1kΩ resistor)
+//   GPIO 12  ───▶  Green LED channel  (PWM, 1kΩ resistor)
+//   GPIO 14  ───▶  Blue  LED channel  (PWM, 1kΩ resistor)
+//   GPIO 5   ───▶  Momentary pushbutton  →  GND
+//   GPIO 18  ───▶  Status LED  (1kΩ resistor  →  GND)
+//
+//   SERIAL COMMANDS (115200 baud)
+//   ──────────────────────────────
+//     mode <n>   —  switch to mode n (0–5)
+//     bright <n> —  set master brightness (0–255)
+//     off        —  all channels off
+//     status     —  print current state
+//
+// ╔══════════════════════════════════════════════════════════════╗
+
+// ── Hardware ──────────────────────────────────────────────────
+
+pin R       = pwm    13;      // Red   channel
+pin G       = pwm    12;      // Green channel
+pin B       = pwm    14;      // Blue  channel
+pin STATUS  = output 18;      // Status indicator LED
+pin BTN     = input  5;       // Mode-select pushbutton
+
+// ── PWM Setup ─────────────────────────────────────────────────
+// 1 kHz, 10-bit resolution (0–1023) for smooth 16M-colour fades
+
+R.setup(1000, 10);
+G.setup(1000, 10);
+B.setup(1000, 10);
+
+// ── Tuning Constants ──────────────────────────────────────────
+
+const int DEBOUNCE_MS     = 50;     // Button debounce interval
+const int SERIAL_BAUD     = 115200; // Serial console baud
+const int FADE_SPEED      = 5;      // Steps per animation tick
+const int BRIGHTNESS_MAX  = 1023;   // 10-bit ceiling
+
+// ── Global State ──────────────────────────────────────────────
+
+int   mode        = 0;             // Current animation 0–5
+int   brightness  = 1023;          // Master brightness scalar (0–1023)
+int   btn_debounce= 0;             // Debounce flag
+float t           = 0.0;           // Animation timebase (ms)
+float hue         = 0.0;           // Colour wheel hue 0.0–360.0
+int   r_out       = 0;             // Computed R output
+int   g_out       = 0;             // Computed G output
+int   b_out       = 0;             // Computed B output
+int   strobe_on   = 0;             // Strobe lamp state
+int   breath_dir  = 1;             // Breathing direction (+1 / -1)
+float breath_val  = 0.0;           // Breathing brightness
+int   pulse_count = 0;             // Police-pulse counter
+int   rainbow_dir = 1;             // Rainbow sweep direction
+
+// ── Mode Enumeration ──────────────────────────────────────────
+//  0 — Static warm white (2700 K)
+//  1 — Rainbow colour-wheel sweep
+//  2 — Breathing glow (slow sine)
+//  3 — Police strobe (red/blue flash)
+//  4 — Candle flicker (randomised warm)
+//  5 — Party pulse (bass-thump simulation)
+
+// ═══════════════════════════════════════════════════════════════
+//  EVENT HANDLERS
+// ═══════════════════════════════════════════════════════════════
+
+// ── Button: cycle through modes ───────────────────────────────
+
+on BTN.press {
+    if (btn_debounce == 0) {
+        btn_debounce = 1;
+        mode = mode + 1;
+        if (mode > 5) {
+            mode = 0;
+        }
+        STATUS = 1;
+        STATUS = 0 after 100;
+        print("→ Mode: ");
+        print(mode);
+    }
+}
+
+// ── Button debounce release ───────────────────────────────────
+
+every 50 as debounce_timer {
+    btn_debounce = 0;
+    stop debounce_timer;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ANIMATION ENGINE (runs at ~100 Hz)
+// ═══════════════════════════════════════════════════════════════
+
+every 10 {
+    t = millis();
+
+    // ── Dispatch to current mode ──
+
+    if (mode == 0) {
+        hue = 45.0;
+        breath_val = 1.0;
+    }
+
+    if (mode == 1) {
+        // Rainbow sweep — hue cycles continuously
+        hue = hue + 0.5;
+        if (hue > 360.0) {
+            hue = hue - 360.0;
+        }
+        breath_val = 1.0;
+    }
+
+    if (mode == 2) {
+        // Breathing glow — brightness oscillates
+        hue = 0.0;
+        breath_val = breath_val + (0.005 * breath_dir);
+        if (breath_val > 1.0) {
+            breath_dir = -1;
+        }
+        if (breath_val < 0.05) {
+            breath_dir = 1;
+        }
+    }
+
+    if (mode == 3) {
+        // Police strobe — alternating red/blue pulses
+        pulse_count = pulse_count + 1;
+        if (pulse_count > 30) {
+            pulse_count = 0;
+            strobe_on = !strobe_on;
+        }
+        if (strobe_on == 1) {
+            hue = 0.0;
+        } else {
+            hue = 240.0;
+        }
+        breath_val = 1.0;
+    }
+
+    if (mode == 4) {
+        // Candle flicker — warm hue with random-intensity jitter
+        hue = 30.0 + sin(t * 0.007) * 9.0;
+        breath_val = 0.55 + sin(t * 0.03) * 0.12
+                   + sin(t * 0.017) * 0.18
+                   + sin(t * 0.041) * 0.15;
+    }
+
+    if (mode == 5) {
+        // Party pulse — hue sweeps, brightness thumps
+        hue = hue + 1.2;
+        if (hue > 360.0) {
+            hue = hue - 360.0;
+        }
+        breath_val = abs(sin(t * 0.008));
+    }
+
+    // ── Hue → RGB conversion (standard HSV algorithm) ─────────
+
+    float h_norm = hue / 60.0;
+    int   h_seg  = h_norm;                // truncate to int
+    float h_frac = h_norm - h_seg;        // fractional part
+    float p = 0.0;
+    float q = 0.0;
+    float tr = 0.0;
+
+    p = breath_val * (1.0 - 0.0);
+    q = breath_val * (1.0 - h_frac * 0.0);
+    tr = breath_val * (1.0 - (1.0 - h_frac) * 0.0);
+
+    if (h_seg == 0) {
+        r_out = breath_val * BRIGHTNESS_MAX;
+        g_out = tr * BRIGHTNESS_MAX;
+        b_out = p * BRIGHTNESS_MAX;
+    } else {
+        if (h_seg == 1) {
+            r_out = q * BRIGHTNESS_MAX;
+            g_out = breath_val * BRIGHTNESS_MAX;
+            b_out = p * BRIGHTNESS_MAX;
+        } else {
+            if (h_seg == 2) {
+                r_out = p * BRIGHTNESS_MAX;
+                g_out = breath_val * BRIGHTNESS_MAX;
+                b_out = tr * BRIGHTNESS_MAX;
+            } else {
+                if (h_seg == 3) {
+                    r_out = p * BRIGHTNESS_MAX;
+                    g_out = q * BRIGHTNESS_MAX;
+                    b_out = breath_val * BRIGHTNESS_MAX;
+                } else {
+                    if (h_seg == 4) {
+                        r_out = tr * BRIGHTNESS_MAX;
+                        g_out = p * BRIGHTNESS_MAX;
+                        b_out = breath_val * BRIGHTNESS_MAX;
+                    } else {
+                        r_out = breath_val * BRIGHTNESS_MAX;
+                        g_out = p * BRIGHTNESS_MAX;
+                        b_out = q * BRIGHTNESS_MAX;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Apply master brightness ────────────────────────────────
+
+    r_out = r_out * brightness / BRIGHTNESS_MAX;
+    g_out = g_out * brightness / BRIGHTNESS_MAX;
+    b_out = b_out * brightness / BRIGHTNESS_MAX;
+
+    // ── Clamp outputs ──────────────────────────────────────────
+
+    if (r_out > BRIGHTNESS_MAX) { r_out = BRIGHTNESS_MAX; }
+    if (r_out < 0) { r_out = 0; }
+    if (g_out > BRIGHTNESS_MAX) { g_out = BRIGHTNESS_MAX; }
+    if (g_out < 0) { g_out = 0; }
+    if (b_out > BRIGHTNESS_MAX) { b_out = BRIGHTNESS_MAX; }
+    if (b_out < 0) { b_out = 0; }
+
+    // ── Drive PWM channels ─────────────────────────────────────
+
+    R.write(r_out);
+    G.write(g_out);
+    B.write(b_out);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SERIAL CONSOLE (polled every 100 ms)
+// ═══════════════════════════════════════════════════════════════
+
+every 100 {
+    // Serial command parsing is done in raw C for flexibility
+}
+
+c global {
+    // ── Serial command parser ──────────────────────────────────
+    void iotift_serial_tick() {
+        if (!Serial.available()) return;
+
+        String cmd = Serial.readStringUntil('\n');
+        cmd.trim();
+
+        if (cmd == "off") {
+            ledcWrite(0, 0);
+            ledcWrite(1, 0);
+            ledcWrite(2, 0);
+            Serial.println("OK: all channels off");
+            return;
+        }
+
+        if (cmd == "status") {
+            Serial.print("mode=");
+            Serial.print(mode);
+            Serial.print(" brightness=");
+            Serial.print(brightness);
+            Serial.print(" r=");
+            Serial.print(r_out);
+            Serial.print(" g=");
+            Serial.print(g_out);
+            Serial.print(" b=");
+            Serial.println(b_out);
+            return;
+        }
+
+        if (cmd.startsWith("mode ")) {
+            int m = cmd.substring(5).toInt();
+            if (m >= 0 && m <= 5) {
+                mode = m;
+                Serial.print("OK: mode=");
+                Serial.println(m);
+            } else {
+                Serial.println("ERR: mode must be 0–5");
+            }
+            return;
+        }
+
+        if (cmd.startsWith("bright ")) {
+            int v = cmd.substring(7).toInt();
+            if (v >= 0 && v <= 1023) {
+                brightness = v;
+                Serial.print("OK: brightness=");
+                Serial.println(v);
+            } else {
+                Serial.println("ERR: brightness must be 0–1023");
+            }
+            return;
+        }
+
+        Serial.println("ERR: unknown command");
+    }
+}
+
+// ── Register serial handler ────────────────────────────────────
+
+c setup {
+    Serial.println();
+    Serial.println("╔══════════════════════════════════╗");
+    Serial.println("║   CONSOLE RGB  ·  Iotift v1.0   ║");
+    Serial.println("╠══════════════════════════════════╣");
+    Serial.println("║  mode 0 — Warm White            ║");
+    Serial.println("║  mode 1 — Rainbow Sweep         ║");
+    Serial.println("║  mode 2 — Breathing Glow        ║");
+    Serial.println("║  mode 3 — Police Strobe         ║");
+    Serial.println("║  mode 4 — Candle Flicker        ║");
+    Serial.println("║  mode 5 — Party Pulse           ║");
+    Serial.println("╠══════════════════════════════════╣");
+    Serial.println("║  Serial: mode N | bright N | off║");
+    Serial.println("╚══════════════════════════════════╝");
+    Serial.println();
+}
+
+c loop {
+    iotift_serial_tick();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  STARTUP SEQUENCE
+// ═══════════════════════════════════════════════════════════════
+
+STATUS = 1;
+STATUS = 0 after 300;
+STATUS = 1 after 600;
+STATUS = 0 after 900;
+
+print("Console RGB ready.");
+print("ESP32 free heap: ");

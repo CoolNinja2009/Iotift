@@ -19,11 +19,14 @@ build/
 .DS_Store
 Thumbs.db
 
-# Iotift compiler generated output
-generated.c
-generated.h
-generated.bin
+# Iotift — generated C output
+*.c
+*.h
 *.bin
+generated/
+
+# Generated PlatformIO projects
+*_project/
 
 # Scratch / backup area
 nothing/
