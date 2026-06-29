@@ -54,7 +54,8 @@ class IRCodeGen:
 
     def __init__(self, device: str = 'esp32',
                  baud_rate: int = 115200,
-                 scheduler_slots: int = 16) -> None:
+                 scheduler_slots: int = 16,
+                 debug_source_map: bool = False) -> None:
         self._device = device
         self._baud = baud_rate
         self._max_tasks = scheduler_slots
@@ -68,6 +69,44 @@ class IRCodeGen:
 
         # Loop call list
         self._loop_calls: List[str] = []
+
+        # Source map (Milestone 5 — enabled via --debug)
+        self._debug_source_map = debug_source_map
+        self._current_iot_line: int = 0
+        self._source_map_entries: List[dict] = []  # [{iot_line, c_lines: [start, end]}]
+
+    @property
+    def source_map(self) -> Optional[dict]:
+        """Return the source map as a JSON-serializable dict, or None if disabled."""
+        if not self._debug_source_map or not self._source_map_entries:
+            return None
+        return {
+            'version': 1,
+            'source': '',
+            'generated': '',
+            'mappings': self._source_map_entries,
+        }
+
+    def _track_source(self, line: int) -> None:
+        """Set the current .iot source line for mapping."""
+        if self._debug_source_map and line > 0:
+            self._current_iot_line = line
+
+    def _record_mapping(self, c_line_index: int) -> None:
+        """Record that the current .iot line produced a C line."""
+        if not self._debug_source_map or self._current_iot_line <= 0:
+            return
+        # Check if we already have an entry for this iot line
+        if (self._source_map_entries and
+                self._source_map_entries[-1]['iot_line'] == self._current_iot_line):
+            # Extend the range
+            entry = self._source_map_entries[-1]
+            entry['c_lines'][1] = c_line_index
+        else:
+            self._source_map_entries.append({
+                'iot_line': self._current_iot_line,
+                'c_lines': [c_line_index, c_line_index],
+            })
 
     # ─────────────────────────────────────────
     #  PUBLIC ENTRY
@@ -102,7 +141,38 @@ class IRCodeGen:
         self._emit_setup(module)
         self._emit_main_loop(module)
 
+        # Inject source map comments if debug enabled
+        if self._debug_source_map and self._source_map_entries:
+            self._inject_source_comments()
+
+        # Update source map with final output path info
+        if self._source_map_entries:
+            self.source_map['source'] = module.source_path or ''
+            self.source_map['generated'] = 'generated.c'
+
         return '\n'.join(self._lines)
+
+    def _inject_source_comments(self) -> None:
+        """Post-process: inject // @iot:line N comments into C output."""
+        # Build a reverse index: C line → iot line
+        c_to_iot: Dict[int, int] = {}
+        for entry in self._source_map_entries:
+            start, end = entry['c_lines']
+            for c_line in range(start, end + 1):
+                c_to_iot[c_line] = entry['iot_line']
+
+        # Inject comments: scan lines in reverse and insert
+        new_lines = []
+        for i, line in enumerate(self._lines):
+            # Skip blank lines and comment-only lines for cleanliness
+            stripped = line.strip()
+            if stripped and not stripped.startswith('// @iot:') and not stripped.startswith('/*'):
+                if i in c_to_iot and not stripped.startswith('#'):
+                    new_lines.append(f'{line}  // @iot:line {c_to_iot[i]}')
+                    continue
+            new_lines.append(line)
+
+        self._lines = new_lines
 
     # ─────────────────────────────────────────
     #  EMIT SECTIONS
@@ -414,9 +484,13 @@ class IRCodeGen:
                 if bb.label != fn.entry_block and bb.label:
                     self._lines.append(f'  // {bb.label}')
                 for instr in bb.instructions:
+                    # Track source line from IR instruction
+                    if hasattr(instr, 'line') and instr.line > 0:
+                        self._track_source(instr.line)
                     c_line = self._instr_c(instr)
                     if c_line:
                         self._lines.append(f'  {c_line}')
+                        self._record_mapping(len(self._lines) - 1)
 
         self._lines.append('}')
         self._lines.append('')
@@ -708,9 +782,12 @@ class IRCodeGen:
         for instr in entry.instructions:
             if isinstance(instr, IRBranch):
                 continue
+            if hasattr(instr, 'line') and instr.line > 0:
+                self._track_source(instr.line)
             c_line = self._instr_c(instr)
             if c_line:
                 self._lines.append(f'  {c_line}')
+                self._record_mapping(len(self._lines) - 1)
 
         cond = self._value_c(branch.cond)
         true_label = branch.true_label
@@ -732,9 +809,12 @@ class IRCodeGen:
             for instr in true_block.instructions:
                 if isinstance(instr, (IRBranch, IRJump)):
                     continue
+                if hasattr(instr, 'line') and instr.line > 0:
+                    self._track_source(instr.line)
                 c_line = self._instr_c(instr)
                 if c_line:
                     self._lines.append(f'    {c_line}')
+                    self._record_mapping(len(self._lines) - 1)
 
         self._lines.append(f'  }}')
 
@@ -748,10 +828,16 @@ class IRCodeGen:
                 pass  # skip label comments for structured
             for instr in bb.instructions:
                 if isinstance(instr, (IRJump, IRReturn)) and isinstance(instr, IRReturn):
+                    if hasattr(instr, 'line') and instr.line > 0:
+                        self._track_source(instr.line)
                     c_line = self._instr_c(instr)
                     if c_line:
                         self._lines.append(f'  {c_line}')
+                        self._record_mapping(len(self._lines) - 1)
                 elif not isinstance(instr, (IRJump,)):
+                    if hasattr(instr, 'line') and instr.line > 0:
+                        self._track_source(instr.line)
                     c_line = self._instr_c(instr)
                     if c_line:
                         self._lines.append(f'  {c_line}')
+                        self._record_mapping(len(self._lines) - 1)

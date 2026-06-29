@@ -343,6 +343,9 @@ class IRModule:
     # Scheduler
     scheduler_needed: bool = False
 
+    # Source map (Milestone 5)
+    source_path: str = ''
+
     # Temp counter for unique names
     _temp_counter: int = field(default=0, repr=False)
     _label_counter: int = field(default=0, repr=False)

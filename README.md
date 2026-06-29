@@ -96,7 +96,7 @@ python iotift.py blink.iot --flash
 | **2 — IR & Optimization** | ✅ Done | Three-address code IR, constant folding, DCE, RSE, 54 tests |
 | **3 — Embedded Improvements** | ✅ Done | Real interrupts, min-heap scheduler, HAL architecture, ISR safety |
 | **4 — Standard Library** | ✅ Done | Import system, stdlib modules, prelude auto-import, 49 tests |
-| **5 — Tooling** | 📋 Planned | Formatter, linter, polished CLI |
+| **5 — Tooling** | ✅ Done | Formatter, linter, polished CLI, source maps (84 tests) |
 | **6 — LSP & Editor** | 📋 Planned | VS Code extension, diagnostics, completion, hover |
 | **7 — Multi-Target** | 📋 Planned | STM32, RP2040, nRF52, bare-metal backends, production features |
 
@@ -913,54 +913,77 @@ stop blinker after 10000;
 ## ⚙️ CLI Reference
 
 ```
-python iotift.py <source.iot> [options]
+iotift <command> [options]
+
+Commands:
+  check   <file.iot>              Type-check only, no code generation
+  build   <file.iot> [-o out.c]   Compile to C (default command)
+  flash   <file.iot>              Compile + flash to device
+  fmt     <file.iot> [--check]    Format source file
+  lint    <file.iot>              Run linter
+  new     <project-name>          Scaffold new project
+  version                         Print version
+
+Legacy: iotift <file.iot> [options]  (equivalent to 'build')
 ```
+
+### Common Flags
 
 | Flag | Description |
 |------|-------------|
-| `<source.iot>` | **Required.** The input Iotift source file |
-| `-o`, `--output <file>` | Output C file (default: `generated.c`) |
-| `--ast` | Dump the Abstract Syntax Tree to stdout (for debugging) |
-| `--ir-dump` | Dump the IR to stdout (for debugging, implies `--no-optimize`) |
+| `-o`, `--output <file>` | Output C file (default: `<source>.c`) |
+| `--ast` | Dump the AST to stdout (for debugging) |
+| `--ir-dump` | Dump the IR to stdout (implies `--no-optimize`) |
 | `--direct-codegen` | Use direct AST→C codegen (skip IR pipeline) |
 | `--no-optimize` | Skip IR optimization passes |
-| `--device <target>` | Target device (default: `esp32`) |
-| `--project` | Generate a full PlatformIO project folder instead of a single `.c` file |
-| `--flash` | Generate PlatformIO project, build, and upload to device |
-| `--port <port>` | Serial port for flashing (e.g. `COM3`, `/dev/ttyUSB0`). If omitted, auto-detects ESP32 |
+| `--target`, `--device <target>` | Target device (default: `esp32`) |
+| `--debug` | Emit source maps (`// @iot:line N` comments + `.map.json`) |
+| `--project` | Generate a full PlatformIO project folder |
+| `--flash` | Generate PlatformIO project, build, and upload |
+| `--port <port>` | Serial port for flashing (auto-detected if omitted) |
 | `--Werror` | Promote all warnings to errors |
-| `--Wno <name>` | Disable a specific warning (e.g., `unused-variable`, `implicit-narrowing`) |
+| `--Wno <name>` | Disable a specific warning |
 | `--scheduler-slots <N>` | Number of scheduler task slots (default: 16) |
 
 ### Examples
 
 ```bash
+# Type-check only (no C output)
+iotift check blink.iot
+
 # Basic compilation (uses IR pipeline by default)
+iotift build blink.iot -o blink.c
+
+# Legacy style (backward compatible)
 python iotift.py blink.iot -o blink.c
 
-# Use direct AST→C codegen (legacy path)
-python iotift.py blink.iot -o blink.c --direct-codegen
+# Compile with source maps
+iotift build blink.iot --debug
 
-# Dump AST for debugging
-python iotift.py blink.iot --ast
+# Format code
+iotift fmt blink.iot
+iotift fmt blink.iot --check     # check only, no modification
 
-# Dump IR for debugging
-python iotift.py blink.iot --ir-dump
+# Run linter
+iotift lint blink.iot
 
-# Generate PlatformIO project (folder with platformio.ini + src/main.cpp)
-python iotift.py blink.iot --project
+# Scaffold new project
+iotift new my-project
 
-# Compile and flash in one command (auto-detect port)
-python iotift.py blink.iot --flash
+# Print version
+iotift version
+
+# Compile and flash in one command
+iotift flash blink.iot
 
 # Flash to a specific port
-python iotift.py blink.iot --flash --port COM5
+iotift flash blink.iot --port COM5
+
+# Dump IR for debugging
+iotift build blink.iot --ir-dump
 
 # Treat warnings as errors
-python iotift.py blink.iot --Werror
-
-# Suppress specific warnings
-python iotift.py blink.iot --Wno unused-variable --Wno implicit-narrowing
+iotift build blink.iot --Werror
 ```
 
 ### Auto-Detection
@@ -1101,24 +1124,31 @@ Iotift/
 │   └── esp32_arduino.py# ESP32 Arduino HAL implementation
 │
 ├── iotift/             # Iotift package
-│   └── stdlib/         # Standard library (.iot files)
-│       ├── time.iot    #   millis, micros, delay, delay_us
-│       ├── math.iot    #   sin, cos, tan, sqrt, abs, pow, ...
-│       ├── gpio.iot    #   digitalRead, digitalWrite, pinMode, toggle
-│       ├── serial.iot  #   serialBegin, serialPrint, serialRead
-│       ├── i2c.iot     #   i2cBegin, i2cRead, i2cWrite, i2cScan
-│       ├── spi.iot     #   spiBegin, spiTransfer
-│       └── pwm.iot     #   pwmSetup, pwmWrite, pwmStop
+│   ├── __init__.py     #   Package init
+│   ├── stdlib/         #   Standard library (.iot files)
+│   │   ├── time.iot    #     millis, micros, delay, delay_us
+│   │   ├── math.iot    #     sin, cos, tan, sqrt, abs, pow, ...
+│   │   ├── gpio.iot    #     digitalRead, digitalWrite, pinMode, toggle
+│   │   ├── serial.iot  #     serialBegin, serialPrint, serialRead
+│   │   ├── i2c.iot     #     i2cBegin, i2cRead, i2cWrite, i2cScan
+│   │   ├── spi.iot     #     spiBegin, spiTransfer
+│   │   └── pwm.iot     #     pwmSetup, pwmWrite, pwmStop
+│   └── tools/          #   Tooling (Milestone 5)
+│       ├── __init__.py #     Package init
+│       ├── formatter.py#     Opinionated code formatter
+│       └── linter.py   #     Static analysis linter
 │
-├── tests/              # Test suite (270 tests)
+├── tests/              # Test suite (354 tests)
 │   ├── test_lexer.py   # 29 tests
 │   ├── test_parser.py  # 41 tests
 │   ├── test_codegen.py # 14 tests
 │   ├── test_semantic.py# 65 tests
 │   ├── test_ir.py      # 54 tests
 │   ├── test_hal.py     # 18 tests
-│   ├── test_imports.py # 30 tests  (new)
-│   └── test_stdlib.py  # 19 tests  (new)
+│   ├── test_imports.py # 30 tests
+│   ├── test_stdlib.py  # 19 tests
+│   ├── test_formatter.py # 57 tests (new)
+│   └── test_linter.py  # 27 tests (new)
 │
 ├── examples/           # Example .iot programs
 │   ├── led.iot         #   RGB LED PWM fader

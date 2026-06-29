@@ -61,9 +61,13 @@ class IRBuilder:
     def __init__(self, module: IRModule, func: IRFunction) -> None:
         self.module = module
         self.func = func
+        self._current_line: int = 0  # Track current AST source line
 
     def emit(self, instr) -> None:
         """Append an instruction to the current block."""
+        # Set line info if available and not already set
+        if self._current_line > 0 and getattr(instr, 'line', 0) == 0:
+            instr.line = self._current_line
         # Find the current (last) block
         if not self.func.blocks:
             self.func.new_block(self.func.entry_block or 'entry')
@@ -692,6 +696,9 @@ class IRLowering:
 
     def _lower_stmt(self, node: Node) -> List:
         """Lower a statement node to a list of IR instructions."""
+        # Track source line for source map generation (Milestone 5)
+        if hasattr(node, 'line') and node.line > 0 and self.builder:
+            self.builder._current_line = node.line
 
         if isinstance(node, Assign):
             return self._lower_assign(node)
@@ -1035,6 +1042,9 @@ class IRLowering:
         """Lower an expression. Returns (value, instructions).
         If *dest* is provided, result is stored there.
         """
+        # Track source line for source map generation (Milestone 5)
+        if hasattr(node, 'line') and node.line > 0 and self.builder:
+            self.builder._current_line = node.line
 
         if isinstance(node, Literal):
             ctype = to_ctype(node.vtype)

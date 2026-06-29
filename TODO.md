@@ -255,46 +255,46 @@
 
 ---
 
-## MILESTONE 5 — Tooling
+## MILESTONE 5 — Tooling ✅ **(DONE)**
 
 **Goal:** Formatter, linter, polished CLI.
 
 ### 5.1 — CLI redesign
-- [ ] `iotift check file.iot` — type-check only, no codegen
-- [ ] `iotift build file.iot -o output.c` — compile to C
-- [ ] `iotift flash file.iot` — compile + flash (auto-detect port)
-- [ ] `iotift fmt file.iot` — format file in-place
-- [ ] `iotift fmt --check file.iot` — check formatting without modifying
-- [ ] `iotift lint file.iot` — run linter
-- [ ] `iotift new project-name` — scaffold new project
-- [ ] `iotift version` — print version
-- [ ] `--debug` flag — emit source maps, verbose IR dumps
-- [ ] `--target` flag — select target device
+- [x] `iotift check file.iot` — type-check only, no codegen
+- [x] `iotift build file.iot -o output.c` — compile to C
+- [x] `iotift flash file.iot` — compile + flash (auto-detect port)
+- [x] `iotift fmt file.iot` — format file in-place
+- [x] `iotift fmt --check file.iot` — check formatting without modifying
+- [x] `iotift lint file.iot` — run linter
+- [x] `iotift new project-name` — scaffold new project
+- [x] `iotift version` — print version
+- [x] `--debug` flag — emit source maps, verbose IR dumps
+- [x] `--target` flag — select target device
 
 ### 5.2 — Formatter (`iotift/tools/formatter.py`)
-- [ ] Opinionated, zero configuration
-- [ ] 4-space indentation
-- [ ] Opening brace on same line
-- [ ] One blank line between top-level declarations
-- [ ] Semicolons preserved
-- [ ] Long lines (>100 chars) wrapped
+- [x] Opinionated, zero configuration
+- [x] 4-space indentation
+- [x] Opening brace on same line
+- [x] One blank line between top-level declarations
+- [x] Semicolons preserved
+- [x] Long lines (>100 chars) wrapped
 
 ### 5.3 — Linter (`iotift/tools/linter.py`)
-- [ ] `no-float-in-isr` — error
-- [ ] `no-heap-in-isr` — error
-- [ ] `no-print-in-isr` — warning
-- [ ] `no-blocking-in-timer` — warning
-- [ ] `prefer-fixed-width` — warning (`int` → `i32`)
-- [ ] `unused-variable` — warning
-- [ ] `unused-function` — warning
-- [ ] `empty-timer` — warning
-- [ ] `const-candidate` — info (variable never mutated)
-- [ ] `volatile-needed` — warning (variable shared with ISR)
+- [x] `no-float-in-isr` — error
+- [x] `no-heap-in-isr` — error
+- [x] `no-print-in-isr` — warning
+- [x] `no-blocking-in-timer` — warning
+- [x] `prefer-fixed-width` — warning (`int` → `i32`)
+- [x] `unused-variable` — warning
+- [x] `unused-function` — warning
+- [x] `empty-timer` — warning
+- [x] `const-candidate` — info (variable never mutated)
+- [x] `volatile-needed` — warning (variable shared with ISR)
 
 ### 5.4 — Source maps
-- [ ] `.iot` line → generated `.c` line mapping
-- [ ] Emit as comment in generated C (`// @iot:line 42`)
-- [ ] Separate `.map` JSON file for tooling
+- [x] `.iot` line → generated `.c` line mapping
+- [x] Emit as comment in generated C (`// @iot:line 42`)
+- [x] Separate `.map` JSON file for tooling
 
 ---
 
@@ -546,6 +546,46 @@
   - `tests/test_stdlib.py` — 19 tests: prelude availability, explicit imports,
     codegen verification for each stdlib module
 - README updated: M4 status, import docs, pipeline diagram, project structure
+- All existing examples still compile: led.iot, console_rgb.iot, argb.iot
+
+---
+
+### Session 2026-06-29 (Milestone 5 Implementation)
+- Created `iotift/__init__.py` — proper Python package init
+- Created `iotift/tools/__init__.py` — tooling package
+- Created `iotift/tools/formatter.py` (~540 lines): AST-based pretty-printer
+  - Opinionated rules: 4-space indent, same-line braces, blank line between top-level decls
+  - Preserves semicolons, wraps long lines, formats time literals
+  - Preserves C block content as-is
+  - `format_source()`, `format_file()`, `check_format()` public API
+- Created `iotift/tools/linter.py` (~340 lines): AST-based static analyzer
+  - 10 lint rules: no-float-in-isr (error), no-print-in-isr, no-blocking-in-timer,
+    prefer-fixed-width, empty-timer, unused-variable, unused-function,
+    const-candidate, volatile-needed, parse-error
+  - Three severity levels: ERROR, WARNING, INFO
+  - Two-pass: collect definitions → walk AST with context tracking
+- Redesigned CLI (`iotift.py`): subcommand architecture
+  - `iotift check` — type-check only, no codegen
+  - `iotift build` — compile to C
+  - `iotift flash` — compile + flash to device
+  - `iotift fmt [--check]` — format source file
+  - `iotift lint` — run linter
+  - `iotift new <name>` — scaffold new project (iotift.toml + .iot + .gitignore)
+  - `iotift version` — print version
+  - Backward compatible: `iotift file.iot -o out.c` still works (legacy mode)
+  - Added `--debug` flag for source maps
+  - Added `--target` flag alias for `--device`
+- Added source map support (`ir_codegen.py`):
+  - `--debug` flag enables `// @iot:line N` comments in generated C
+  - Generates `.map.json` file with line mappings
+  - IR instructions track source line via `IRBuilder._current_line`
+  - `ir.py`: added `source_path` field to `IRModule`
+  - `ir_lowering.py`: `_lower_stmt` and `_lower_expr` set `_current_line` from AST nodes
+- Test suite: 354 tests passing (270 original + 84 new)
+  - `tests/test_formatter.py` — 57 tests: all declaration/statement/expression types,
+    indentation, brace placement, idempotency, C block preservation
+  - `tests/test_linter.py` — 27 tests: all 10 lint rules, severity levels,
+    integration with multiple diagnostics
 - All existing examples still compile: led.iot, console_rgb.iot, argb.iot
 
 *Last updated: 2026-06-29*
