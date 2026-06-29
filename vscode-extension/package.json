@@ -2,7 +2,7 @@
   "name": "iotift",
   "displayName": "Iotift",
   "description": "Iotift embedded programming language support for VS Code",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "iotift",
   "license": "MIT",
   "repository": {

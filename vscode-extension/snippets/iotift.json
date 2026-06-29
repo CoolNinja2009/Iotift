@@ -257,5 +257,155 @@
       "}"
     ],
     "description": "Raw C code injection block"
+  },
+  "wifi sta": {
+    "prefix": "wifi",
+    "body": [
+      "wifi ${1:home} {",
+      "    ssid: \"${2:MyWiFi}\",",
+      "    password: \"${3:mypassword}\"",
+      "};"
+    ],
+    "description": "WiFi STA declaration"
+  },
+  "wifi sta full": {
+    "prefix": "wifi_sta",
+    "body": [
+      "wifi ${1:home} {",
+      "    ssid: \"${2:MyWiFi}\",",
+      "    password: \"${3:mypassword}\",",
+      "    hostname: \"${4:iotift-device}\",",
+      "    connect_timeout: ${5:30s},",
+      "    retry: ${6|fixed,none,forever,exponential|},",
+      "    power_save: ${7|none,light,deep|}",
+      "};"
+    ],
+    "description": "WiFi STA declaration with all options"
+  },
+  "wifi sta static ip": {
+    "prefix": "wifi_static",
+    "body": [
+      "wifi ${1:home} {",
+      "    ssid: \"${2:MyWiFi}\",",
+      "    password: \"${3:mypassword}\",",
+      "    static_ip: \"${4:192.168.1.100}\",",
+      "    gateway: \"${5:192.168.1.1}\",",
+      "    subnet: \"${6:255.255.255.0}\",",
+      "    dns: \"${7:8.8.8.8}\"",
+      "};"
+    ],
+    "description": "WiFi STA declaration with static IP"
+  },
+  "wifi ap": {
+    "prefix": "wifi_ap",
+    "body": [
+      "wifi ${1:myAP} {",
+      "    mode: ap,",
+      "    ssid: \"${2:MyHotspot}\",",
+      "    password: \"${3:ap_password}\",",
+      "    channel: ${4:1},",
+      "    max_clients: ${5:8}",
+      "};"
+    ],
+    "description": "WiFi AP declaration"
+  },
+  "wifi ap open": {
+    "prefix": "wifi_ap_open",
+    "body": [
+      "wifi ${1:guest} {",
+      "    mode: ap,",
+      "    ssid: \"${2:FreeWiFi}\",",
+      "    channel: ${3:6},",
+      "    max_clients: ${4:4}",
+      "};"
+    ],
+    "description": "WiFi open AP declaration (no password)"
+  },
+  "wifi retry custom": {
+    "prefix": "wifi_retry",
+    "body": [
+      "retry: custom {",
+      "    count: ${1:5},",
+      "    interval: ${2:10s},",
+      "    max_interval: ${3:60s},",
+      "    backoff: ${4|fixed,exponential|}",
+      "}"
+    ],
+    "description": "WiFi custom retry policy"
+  },
+  "on wifi connect": {
+    "prefix": "on_wifi_connect",
+    "body": [
+      "on ${1:home}.connect {",
+      "    print(\"Connected! IP: \" + ${1:home}.ip);",
+      "}"
+    ],
+    "description": "WiFi connect event handler"
+  },
+  "on wifi disconnect": {
+    "prefix": "on_wifi_disconnect",
+    "body": [
+      "on ${1:home}.disconnect {",
+      "    print(\"Disconnected. State: \" + ${1:home}.state);",
+      "}"
+    ],
+    "description": "WiFi disconnect event handler"
+  },
+  "on wifi got_ip": {
+    "prefix": "on_wifi_got_ip",
+    "body": [
+      "on ${1:home}.got_ip {",
+      "    print(\"Got IP: \" + ${1:home}.ip);",
+      "}"
+    ],
+    "description": "WiFi got_ip event handler"
+  },
+  "on wifi scan_done": {
+    "prefix": "on_wifi_scan_done",
+    "body": [
+      "on ${1:home}.scan_done {",
+      "    int count = scan_result_count();",
+      "    for int i = 0; i < count; i += 1 {",
+      "        print(scan_result_ssid(i));",
+      "        print(\": \");",
+      "        println(scan_result_rssi(i));",
+      "    }",
+      "}"
+    ],
+    "description": "WiFi scan_done event handler with result accessors"
+  },
+  "on wifi client_join": {
+    "prefix": "on_wifi_client_join",
+    "body": [
+      "on ${1:ap_if}.client_join {",
+      "    print(\"Client joined. Total: \" + ${1:ap_if}.clients);",
+      "}"
+    ],
+    "description": "WiFi AP client_join event handler"
+  },
+  "on wifi client_leave": {
+    "prefix": "on_wifi_client_leave",
+    "body": [
+      "on ${1:ap_if}.client_leave {",
+      "    print(\"Client left. Total: \" + ${1:ap_if}.clients);",
+      "}"
+    ],
+    "description": "WiFi AP client_leave event handler"
+  },
+  "wifi dual mode": {
+    "prefix": "wifi_dual",
+    "body": [
+      "wifi ${1:sta_if} { ssid: \"${2:HomeWiFi}\"; password: \"${3:pass}\"; };",
+      "wifi ${4:ap_if}  { mode: ap; ssid: \"${5:IotiftAP}\"; password: \"${6:ap123}\"; };",
+      "",
+      "on ${1:sta_if}.connect {",
+      "    print(\"STA connected!\");",
+      "}",
+      "",
+      "on ${4:ap_if}.client_join {",
+      "    print(\"Client joined AP!\");",
+      "}"
+    ],
+    "description": "WiFi dual mode (STA + AP)"
   }
 }

@@ -168,6 +168,30 @@
         {
           "name": "keyword.hardware.event.iot",
           "match": "\\b(rising|falling|change|press|release)\\b"
+        },
+        {
+          "name": "keyword.hardware.wifi.iot",
+          "match": "\\b(wifi)\\b"
+        },
+        {
+          "name": "keyword.hardware.wifi.mode.iot",
+          "match": "\\b(sta|ap)\\b"
+        },
+        {
+          "name": "keyword.hardware.wifi.event.iot",
+          "match": "\\b(connect|disconnect|got_ip|scan_done|client_join|client_leave)\\b"
+        },
+        {
+          "name": "keyword.hardware.wifi.method.iot",
+          "match": "\\b(scan)\\b"
+        },
+        {
+          "name": "keyword.hardware.wifi.retry.iot",
+          "match": "\\b(none|fixed|forever|exponential|custom|retry)\\b"
+        },
+        {
+          "name": "entity.name.tag.wifi.config.iot",
+          "match": "\\b(ssid|password|hostname|connect_timeout|power_save|static_ip|gateway|subnet|dns|channel|max_clients|hidden|mode|backoff|interval|max_interval|count)\\b"
         }
       ]
     },
@@ -235,7 +259,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.iot",
-          "match": "\\b(millis|micros|delay|delay_us|digitalRead|digitalWrite|pinMode|toggle|serialBegin|serialPrint|serialRead|serialAvailable|i2cBegin|i2cRead|i2cWrite|i2cScan|spiBegin|spiTransfer|pwmSetup|pwmWrite|pwmStop|sin|cos|tan|sqrt|abs|pow|floor|ceil|round|log|exp)\\s*(?=\\()"
+          "match": "\\b(millis|micros|delay|delay_us|digitalRead|digitalWrite|pinMode|toggle|serialBegin|serialPrint|serialRead|serialAvailable|i2cBegin|i2cRead|i2cWrite|i2cScan|spiBegin|spiTransfer|pwmSetup|pwmWrite|pwmStop|sin|cos|tan|sqrt|abs|pow|floor|ceil|round|log|exp|scan_result_count|scan_result_ssid|scan_result_rssi|scan_result_channel)\\s*(?=\\()"
         },
         {
           "name": "entity.name.function.call.iot",
