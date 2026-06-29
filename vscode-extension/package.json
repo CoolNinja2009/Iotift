@@ -1,0 +1,138 @@
+{
+  "name": "iotift",
+  "displayName": "Iotift",
+  "description": "Iotift embedded programming language support for VS Code",
+  "version": "1.0.0",
+  "publisher": "iotift",
+  "license": "MIT",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "iotift",
+    "embedded",
+    "iot",
+    "esp32",
+    "microcontroller"
+  ],
+  "activationEvents": [
+    "onLanguage:iotift"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "iotift",
+        "aliases": [
+          "Iotift",
+          "iotift"
+        ],
+        "extensions": [
+          ".iot"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "dark": "./icon.png",
+          "light": "./icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "iotift",
+        "scopeName": "source.iot",
+        "path": "./syntaxes/iotift.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "iotift",
+        "path": "./snippets/iotift.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "iotift.compile",
+        "title": "Iotift: Compile to C",
+        "category": "Iotift"
+      },
+      {
+        "command": "iotift.flash",
+        "title": "Iotift: Compile and Flash",
+        "category": "Iotift"
+      },
+      {
+        "command": "iotift.format",
+        "title": "Iotift: Format Document",
+        "category": "Iotift"
+      },
+      {
+        "command": "iotift.lint",
+        "title": "Iotift: Lint Document",
+        "category": "Iotift"
+      },
+      {
+        "command": "iotift.restartServer",
+        "title": "Iotift: Restart Language Server",
+        "category": "Iotift"
+      }
+    ],
+    "configuration": {
+      "title": "Iotift",
+      "properties": {
+        "iotift.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Iotift executable. Leave empty to use the one on PATH."
+        },
+        "iotift.targetDevice": {
+          "type": "string",
+          "default": "esp32",
+          "enum": [
+            "esp32"
+          ],
+          "description": "Target device for compilation."
+        },
+        "iotift.baudRate": {
+          "type": "number",
+          "default": 115200,
+          "description": "Serial baud rate for flashing and monitoring."
+        },
+        "iotift.schedulerSlots": {
+          "type": "number",
+          "default": 16,
+          "description": "Number of scheduler task slots."
+        },
+        "iotift.trace.server": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "description": "Trace LSP communication for debugging."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  }
+}

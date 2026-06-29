@@ -97,7 +97,7 @@ python iotift.py blink.iot --flash
 | **3 — Embedded Improvements** | ✅ Done | Real interrupts, min-heap scheduler, HAL architecture, ISR safety |
 | **4 — Standard Library** | ✅ Done | Import system, stdlib modules, prelude auto-import, 49 tests |
 | **5 — Tooling** | ✅ Done | Formatter, linter, polished CLI, source maps (84 tests) |
-| **6 — LSP & Editor** | 📋 Planned | VS Code extension, diagnostics, completion, hover |
+| **6 — LSP & Editor** | ✅ Done | LSP server, VS Code extension, diagnostics, completion, hover (77 tests) |
 | **7 — Multi-Target** | 📋 Planned | STM32, RP2040, nRF52, bare-metal backends, production features |
 
 ---
@@ -1001,6 +1001,49 @@ to specify `--port`.
 
 ---
 
+## 🔌 LSP & Editor Integration
+
+Iotift includes a full Language Server Protocol (LSP) server and VS Code extension
+for a modern IDE experience.
+
+### LSP Server
+
+```bash
+# Start the language server (for editor integration)
+iotift lsp
+```
+
+The LSP server provides:
+
+| Feature | Description |
+|---------|-------------|
+| **Diagnostics** | Real-time error and warning reporting from lexer, parser, semantic analyzer, and linter |
+| **Completion** | Keywords, types, snippets, in-scope symbols, and stdlib functions |
+| **Hover** | Type information and documentation for variables, functions, pins, structs, enums, and peripherals |
+| **Go-to-Definition** | Jump to the declaration of any symbol |
+| **Find References** | Find all uses of a symbol across the document |
+| **Document Symbols** | Outline view showing all declarations with hierarchical structure |
+
+### VS Code Extension
+
+The extension is in `vscode-extension/` and provides:
+
+- **Syntax highlighting** — Full TextMate grammar for `.iot` files
+- **Snippets** — 30+ ready-made templates (pin, fn, every, on, struct, enum, if, for, etc.)
+- **Commands** — Compile, flash, format, and lint from the command palette
+- **LSP client** — Automatic language server integration
+- **Language configuration** — Bracket matching, auto-closing pairs, comment toggling
+
+To build from source:
+
+```bash
+cd vscode-extension
+npm install
+npm run compile
+```
+
+---
+
 ## 🏗️ Architecture
 
 ```
@@ -1138,7 +1181,7 @@ Iotift/
 │       ├── formatter.py#     Opinionated code formatter
 │       └── linter.py   #     Static analysis linter
 │
-├── tests/              # Test suite (354 tests)
+├── tests/              # Test suite (431 tests)
 │   ├── test_lexer.py   # 29 tests
 │   ├── test_parser.py  # 41 tests
 │   ├── test_codegen.py # 14 tests

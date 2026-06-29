@@ -1,0 +1,261 @@
+{
+  "pin": {
+    "prefix": "pin",
+    "body": "pin ${1:NAME} = ${2|output,input,analog,pwm,i2c,spi|} ${3:NUMBER};",
+    "description": "Pin declaration"
+  },
+  "pin with config": {
+    "prefix": "pin_config",
+    "body": [
+      "pin ${1:NAME} = ${2|output,input,analog,pwm|} ${3:NUMBER} {",
+      "    pull: ${4|up,down,none|},",
+      "    debounce: ${5:50}ms",
+      "};"
+    ],
+    "description": "Pin declaration with configuration block"
+  },
+  "let": {
+    "prefix": "let",
+    "body": "let ${1:name} = ${2:value};",
+    "description": "Immutable variable (type inferred)"
+  },
+  "var": {
+    "prefix": "var",
+    "body": "var ${1:name}: ${2:type} = ${3:value};",
+    "description": "Mutable variable with explicit type"
+  },
+  "const": {
+    "prefix": "const",
+    "body": "const ${1:NAME} = ${2:value};",
+    "description": "Compile-time constant"
+  },
+  "fn": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:params}) {",
+      "    ${3}",
+      "}"
+    ],
+    "description": "Function declaration"
+  },
+  "fn with return type": {
+    "prefix": "fn_typed",
+    "body": [
+      "fn ${1:name}(${2:params}) -> ${3:type} {",
+      "    ${4}",
+      "}"
+    ],
+    "description": "Function declaration with return type"
+  },
+  "isr fn": {
+    "prefix": "isr_fn",
+    "body": [
+      "isr fn ${1:name}() {",
+      "    ${2}",
+      "}"
+    ],
+    "description": "ISR function declaration"
+  },
+  "extern fn": {
+    "prefix": "extern_fn",
+    "body": "extern fn ${1:name}(${2:params});",
+    "description": "External C function declaration"
+  },
+  "struct": {
+    "prefix": "struct",
+    "body": [
+      "struct ${1:Name} {",
+      "    ${2:field}: ${3:type},",
+      "}"
+    ],
+    "description": "Struct declaration"
+  },
+  "enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "    ${2:Variant1},",
+      "    ${3:Variant2} = ${4:5},",
+      "}"
+    ],
+    "description": "Enum declaration"
+  },
+  "type alias": {
+    "prefix": "type_alias",
+    "body": "type ${1:Alias} = ${2:u32};",
+    "description": "Type alias"
+  },
+  "every": {
+    "prefix": "every",
+    "body": [
+      "every ${1:500}ms {",
+      "    ${2}",
+      "}"
+    ],
+    "description": "Repeating timer block"
+  },
+  "every named": {
+    "prefix": "every_named",
+    "body": [
+      "every ${1:1}s as ${2:label} {",
+      "    ${3}",
+      "}"
+    ],
+    "description": "Named repeating timer block"
+  },
+  "every offset": {
+    "prefix": "every_offset",
+    "body": [
+      "every ${1:1}s offset ${2:100}ms {",
+      "    ${3}",
+      "}"
+    ],
+    "description": "Repeating timer with offset"
+  },
+  "after": {
+    "prefix": "after",
+    "body": [
+      "after ${1:5}s {",
+      "    ${2}",
+      "}"
+    ],
+    "description": "One-shot timer block"
+  },
+  "on event": {
+    "prefix": "on_event",
+    "body": [
+      "on ${1:PIN}.${2|press,release,change,rising,falling|} {",
+      "    ${3}",
+      "}"
+    ],
+    "description": "Pin event handler"
+  },
+  "on threshold": {
+    "prefix": "on_threshold",
+    "body": [
+      "on ${1:PIN} ${2|>,<,>=,<=,==|} ${3:50.0} {",
+      "    ${4}",
+      "}"
+    ],
+    "description": "Analog threshold event"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if (${1:condition}) {",
+      "    ${2}",
+      "}"
+    ],
+    "description": "If statement"
+  },
+  "if else": {
+    "prefix": "if_else",
+    "body": [
+      "if (${1:condition}) {",
+      "    ${2}",
+      "} else {",
+      "    ${3}",
+      "}"
+    ],
+    "description": "If-else statement"
+  },
+  "while": {
+    "prefix": "while",
+    "body": [
+      "while (${1:condition}) {",
+      "    ${2}",
+      "}"
+    ],
+    "description": "While loop"
+  },
+  "for": {
+    "prefix": "for",
+    "body": [
+      "for (let ${1:i} = 0; ${1:i} < ${2:N}; ${1:i} += 1) {",
+      "    ${3}",
+      "}"
+    ],
+    "description": "C-style for loop"
+  },
+  "loop": {
+    "prefix": "loop",
+    "body": [
+      "loop {",
+      "    ${1}",
+      "}"
+    ],
+    "description": "Infinite loop"
+  },
+  "tick": {
+    "prefix": "tick",
+    "body": [
+      "tick {",
+      "    ${1}",
+      "}"
+    ],
+    "description": "Main loop tick handler"
+  },
+  "defer": {
+    "prefix": "defer",
+    "body": [
+      "defer {",
+      "    ${1}",
+      "}"
+    ],
+    "description": "Deferred execution block"
+  },
+  "print": {
+    "prefix": "print",
+    "body": "print(\"${1}\");",
+    "description": "Print to serial"
+  },
+  "println": {
+    "prefix": "println",
+    "body": "println(\"${1}\");",
+    "description": "Print line to serial"
+  },
+  "device": {
+    "prefix": "device",
+    "body": "@device ${1|esp32|}",
+    "description": "Device declaration"
+  },
+  "config": {
+    "prefix": "config",
+    "body": "@config scheduler_slots = ${1:16};",
+    "description": "Scheduler configuration"
+  },
+  "i2c": {
+    "prefix": "i2c",
+    "body": "i2c ${1:bus} { sda: ${2:21}, scl: ${3:22}, speed: ${4:100kHz} };",
+    "description": "I2C peripheral declaration"
+  },
+  "spi": {
+    "prefix": "spi",
+    "body": "spi ${1:bus} { mosi: ${2:23}, miso: ${3:19}, sck: ${4:18}, speed: ${5:10MHz} };",
+    "description": "SPI peripheral declaration"
+  },
+  "uart": {
+    "prefix": "uart",
+    "body": "uart ${1:serial} { tx: ${2:17}, rx: ${3:16}, baud: ${4:9600} };",
+    "description": "UART peripheral declaration"
+  },
+  "import": {
+    "prefix": "import",
+    "body": "import \"${1:file.iot}\";",
+    "description": "Import statement"
+  },
+  "import selective": {
+    "prefix": "import_select",
+    "body": "import { ${1:Name1}, ${2:Name2} } from \"${3:file.iot}\";",
+    "description": "Selective import statement"
+  },
+  "c block": {
+    "prefix": "c_block",
+    "body": [
+      "c ${1|header,global,setup,loop,isr|} {",
+      "    ${2}",
+      "}"
+    ],
+    "description": "Raw C code injection block"
+  }
+}

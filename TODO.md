@@ -298,24 +298,24 @@
 
 ---
 
-## MILESTONE 6 — LSP & Editor Integration
+## MILESTONE 6 — LSP & Editor Integration ✅ **(DONE)**
 
 **Goal:** IDE support (VS Code).
 
 ### 6.1 — LSP server
-- [ ] `iotift/tools/lsp_server.py`
-- [ ] Diagnostics (errors/warnings as-you-type)
-- [ ] Completion (variables, functions, types, keywords)
-- [ ] Hover (type info, documentation)
-- [ ] Go-to-definition
-- [ ] Find references
-- [ ] Document symbols
+- [x] `iotift/tools/lsp_server.py`
+- [x] Diagnostics (errors/warnings as-you-type)
+- [x] Completion (variables, functions, types, keywords)
+- [x] Hover (type info, documentation)
+- [x] Go-to-definition
+- [x] Find references
+- [x] Document symbols
 
 ### 6.2 — VS Code extension
-- [ ] Syntax highlighting (TextMate grammar)
-- [ ] LSP client configuration
-- [ ] Snippets (pin, every, on, fn, struct, enum)
-- [ ] Command: compile, flash, monitor
+- [x] Syntax highlighting (TextMate grammar)
+- [x] LSP client configuration
+- [x] Snippets (pin, every, on, fn, struct, enum)
+- [x] Command: compile, flash, monitor
 
 ---
 
@@ -586,6 +586,41 @@
     indentation, brace placement, idempotency, C block preservation
   - `tests/test_linter.py` — 27 tests: all 10 lint rules, severity levels,
     integration with multiple diagnostics
+- All existing examples still compile: led.iot, console_rgb.iot, argb.iot
+
+### Session 2026-06-29 (Milestone 6 Implementation)
+- Created `iotift/tools/lsp_server.py` (~1030 lines): Full LSP server
+  - JSON-RPC 2.0 transport over stdin/stdout (zero external dependencies)
+  - Diagnostics: combined lexer, parser, semantic, and linter diagnostics
+  - Completion: keywords, types, snippets (30+), in-scope symbols, stdlib functions
+  - Hover: type info and documentation for all symbol types
+  - Go-to-definition: navigates to declarations of variables, functions, pins, structs, etc.
+  - Find references: finds all uses of a symbol with deduplication
+  - Document symbols: outline view with hierarchical struct/enum children
+  - Document sync: full text sync (didOpen/didChange/didClose/didSave)
+  - Parse error recovery: reads parser._errors for diagnostics (parser uses internal recovery)
+- Added `iotift lsp` CLI subcommand
+- Created VS Code extension (`vscode-extension/`):
+  - `package.json` — extension manifest with LSP client config, commands, settings
+  - `syntaxes/iotift.tmLanguage.json` — TextMate grammar with token coloring for:
+    comments, strings, C blocks, keywords, types, directives, numbers, functions
+  - `snippets/iotift.json` — 30+ snippets (pin, fn, every, on, struct, enum, etc.)
+  - `src/extension.ts` — VS Code extension entry point (LSP client + commands)
+  - `language-configuration.json` — bracket matching, auto-closing pairs, comments
+  - `tsconfig.json`, `.vscodeignore`, `README.md` — standard extension packaging
+- Test suite: 431 tests passing (354 original + 77 new LSP tests)
+  - `tests/test_lsp.py` — 77 tests:
+    - 6 transport tests (JSON-RPC framing)
+    - 10 position helper tests (line/col ↔ offset conversion)
+    - 3 lifecycle tests (init/shutdown/errors)
+    - 7 diagnostics tests (lex/parse/semantic/lint/clear/change)
+    - 9 completion tests (keywords/types/snippets/stdlib/symbols/members)
+    - 9 hover tests (function/variable/pin/struct/enum/stdlib)
+    - 4 go-to-definition tests
+    - 4 references tests
+    - 6 document symbols tests (all types/kinds/ranges/children)
+    - 6 integration tests (full pipeline/imports/server info/edge cases)
+    - 9 utility tests (walkers/context/completions)
 - All existing examples still compile: led.iot, console_rgb.iot, argb.iot
 
 *Last updated: 2026-06-29*

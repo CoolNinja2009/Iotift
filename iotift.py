@@ -513,6 +513,12 @@ device = "esp32"
     print(f'Next: cd {project_name} && iotift build {project_name}.iot')
 
 
+def cmd_lsp(args) -> None:
+    """Launch the LSP server."""
+    from iotift.tools.lsp_server import main as lsp_main
+    lsp_main()
+
+
 def cmd_version(args) -> None:
     """Print version."""
     print(f'Iotift Compiler v{__version__}')
@@ -747,6 +753,9 @@ def _build_subcommand_parser() -> argparse.ArgumentParser:
     new = subs.add_parser('new', help='scaffold a new project')
     new.add_argument('name', help='project name')
 
+    # ── lsp ──
+    lsp = subs.add_parser('lsp', help='start language server (for editor integration)')
+
     # ── version ──
     ver = subs.add_parser('version', help='print version')
 
@@ -763,7 +772,7 @@ def main() -> None:
         return
 
     # ── Check for subcommand ──
-    subcommands = {'check', 'build', 'flash', 'fmt', 'lint', 'new', 'version'}
+    subcommands = {'check', 'build', 'flash', 'fmt', 'lint', 'lsp', 'new', 'version'}
     has_subcommand = any(arg in subcommands for arg in sys.argv[1:3])
 
     if has_subcommand:
@@ -781,6 +790,7 @@ def main() -> None:
             'flash': cmd_flash,
             'fmt': cmd_fmt,
             'lint': cmd_lint,
+            'lsp': cmd_lsp,
             'new': cmd_new,
             'version': cmd_version,
         }
