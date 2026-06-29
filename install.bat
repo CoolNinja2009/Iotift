@@ -39,6 +39,21 @@ copy /Y "%IOTIFT_DIR%\vscode-extension\README.md"                   "%EXT_DIR%\"
 if exist "%IOTIFT_DIR%\vscode-extension\out\" (
     if not exist "%EXT_DIR%\out" mkdir "%EXT_DIR%\out"
     copy /Y "%IOTIFT_DIR%\vscode-extension\out\*" "%EXT_DIR%\out\" >nul 2>&1
+) else (
+    echo         WARNING: out/ not found. Compiling...
+    cd /d "%IOTIFT_DIR%\vscode-extension"
+    call npm install >nul 2>&1
+    call npx tsc -p . >nul 2>&1
+    if exist "%IOTIFT_DIR%\vscode-extension\out\" (
+        if not exist "%EXT_DIR%\out" mkdir "%EXT_DIR%\out"
+        copy /Y "%IOTIFT_DIR%\vscode-extension\out\*" "%EXT_DIR%\out\" >nul 2>&1
+        echo         Compiled successfully.
+    ) else (
+        echo         ERROR: Compilation failed. Run manually:
+        echo           cd vscode-extension
+        echo           npm install
+        echo           npx tsc -p .
+    )
 )
 
 if exist "%IOTIFT_DIR%\vscode-extension\syntaxes\" (

@@ -4,39 +4,17 @@
   "scopeName": "source.iot",
   "fileTypes": [".iot"],
   "patterns": [
-    {
-      "include": "#comments"
-    },
-    {
-      "include": "#c-blocks"
-    },
-    {
-      "include": "#strings"
-    },
-    {
-      "include": "#directives"
-    },
-    {
-      "include": "#keywords"
-    },
-    {
-      "include": "#types"
-    },
-    {
-      "include": "#constants"
-    },
-    {
-      "include": "#numbers"
-    },
-    {
-      "include": "#functions"
-    },
-    {
-      "include": "#operators"
-    },
-    {
-      "include": "#identifiers"
-    }
+    { "include": "#comments" },
+    { "include": "#c-blocks" },
+    { "include": "#strings" },
+    { "include": "#directives" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#numbers" },
+    { "include": "#functions" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
   ],
   "repository": {
     "comments": {
@@ -45,21 +23,32 @@
           "name": "comment.block.iot",
           "begin": "/\\*",
           "end": "\\*/",
-          "captures": {
-            "0": {
-              "name": "punctuation.definition.comment.iot"
-            }
-          }
+          "beginCaptures": { "0": { "name": "punctuation.definition.comment.iot" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.comment.iot" } },
+          "patterns": [{ "include": "#todo-tags" }]
         },
         {
           "name": "comment.line.double-slash.iot",
           "begin": "//",
           "end": "$",
-          "captures": {
-            "0": {
-              "name": "punctuation.definition.comment.iot"
-            }
-          }
+          "beginCaptures": { "0": { "name": "punctuation.definition.comment.iot" } },
+          "patterns": [{ "include": "#todo-tags" }]
+        }
+      ]
+    },
+    "todo-tags": {
+      "patterns": [
+        {
+          "name": "keyword.todo.iot",
+          "match": "\\b(TODO|FIXME|HACK|XXX|OPTIMIZE|REVIEW)\\b"
+        },
+        {
+          "name": "keyword.note.iot",
+          "match": "\\b(NOTE|INFO|IDEA)\\b"
+        },
+        {
+          "name": "keyword.warning.iot",
+          "match": "\\b(BUG|WARNING|DANGER|CAUTION|HACK)\\b"
         }
       ]
     },
@@ -70,17 +59,14 @@
           "begin": "\\b(c)\\s+(header|global|setup|loop|isr)\\s*\\{",
           "end": "\\}",
           "beginCaptures": {
-            "1": {
-              "name": "keyword.control.c-block.iotift"
-            },
-            "2": {
-              "name": "entity.name.tag.c-scope.iotift"
-            }
+            "1": { "name": "keyword.control.c-block.iot" },
+            "2": { "name": "entity.name.tag.c-scope.iot" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.embedded.end.iot" }
           },
           "patterns": [
-            {
-              "include": "source.c"
-            }
+            { "include": "source.c" }
           ]
         }
       ]
@@ -91,10 +77,12 @@
           "name": "string.quoted.double.iot",
           "begin": "\"",
           "end": "\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.iot" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.iot" } },
           "patterns": [
             {
               "name": "constant.character.escape.iot",
-              "match": "\\\\[nrt\\\\\"'0]|\\\\x[0-9A-Fa-f]{2}"
+              "match": "\\\\[nrt\\\\\"'0abefv]|\\\\x[0-9A-Fa-f]{2}|\\\\u[0-9A-Fa-f]{4}|\\\\."
             },
             {
               "name": "keyword.operator.interpolation.iot",
@@ -104,11 +92,9 @@
         },
         {
           "name": "string.quoted.single.iot",
-          "match": "'(\\\\[nrt\\\\\"'0]|\\\\x[0-9A-Fa-f]{2}|[^'\\\\])'",
+          "match": "'(?:\\\\[nrt\\\\\"'0abefv]|\\\\x[0-9A-Fa-f]{2}|\\\\u[0-9A-Fa-f]{4}|[^'\\\\])'",
           "captures": {
-            "0": {
-              "name": "string.quoted.single.iot"
-            }
+            "0": { "name": "string.quoted.single.iot" }
           }
         }
       ]
@@ -116,12 +102,12 @@
     "directives": {
       "patterns": [
         {
-          "name": "keyword.directive.device.iot",
-          "match": "@device\\b"
-        },
-        {
-          "name": "keyword.directive.config.iot",
-          "match": "@config\\b"
+          "name": "keyword.directive.iot",
+          "match": "@(device|target|include|config)\\b",
+          "captures": {
+            "0": { "name": "keyword.directive.iot" },
+            "1": { "name": "entity.name.tag.directive.iot" }
+          }
         }
       ]
     },
@@ -136,52 +122,64 @@
           "match": "\\b(while|for|loop|break|continue)\\b"
         },
         {
-          "name": "keyword.control.iot",
-          "match": "\\b(return|defer|as|sizeof)\\b"
+          "name": "keyword.control.flow.iot",
+          "match": "\\b(return|defer)\\b"
         },
         {
-          "name": "keyword.declaration.iot",
-          "match": "\\b(let|var|const|fn|isr|extern|struct|enum|type)\\b"
+          "name": "keyword.control.event.iot",
+          "match": "\\b(every|after|on|schedule|tick|stop|offset|as)\\b"
         },
         {
-          "name": "keyword.qualifier.iot",
-          "match": "\\b(volatile)\\b"
+          "name": "keyword.declaration.function.iot",
+          "match": "\\b(fn|extern|isr)\\b"
         },
         {
-          "name": "keyword.other.iot",
-          "match": "\\b(import|from|pin|device|config|tick|stop|print|println|millis)\\b"
+          "name": "keyword.declaration.variable.iot",
+          "match": "\\b(let|var|const|volatile|sizeof)\\b"
         },
         {
-          "name": "keyword.event.iot",
-          "match": "\\b(every|after|on|offset|as)\\b"
+          "name": "keyword.declaration.type.iot",
+          "match": "\\b(struct|enum|type)\\b"
         },
         {
-          "name": "keyword.direction.iot",
-          "match": "\\b(input|output|analog|pwm|i2c|spi|uart)\\b"
+          "name": "keyword.declaration.pin.iot",
+          "match": "\\b(pin)\\b"
         },
         {
-          "name": "keyword.event-type.iot",
-          "match": "\\b(press|release|change|rising|falling)\\b"
+          "name": "keyword.other.import.iot",
+          "match": "\\b(import|from)\\b"
         },
         {
-          "name": "keyword.config.iot",
-          "match": "\\b(pull|up|down|none|debounce|freq|resolution|sda|scl|speed|mosi|miso|sck|mode|tx|rx|baud)\\b"
+          "name": "keyword.other.print.iot",
+          "match": "\\b(print|println)\\b"
         },
         {
-          "name": "storage.type.modifier.iot",
-          "match": "\\b(void)\\b"
+          "name": "storage.type.modifier.void.iot",
+          "match": "\\bvoid\\b"
+        },
+        {
+          "name": "keyword.hardware.direction.iot",
+          "match": "\\b(input|output|analog|digital)\\b"
+        },
+        {
+          "name": "keyword.hardware.peripheral.iot",
+          "match": "\\b(pwm|adc|dac|uart|spi|i2c)\\b"
+        },
+        {
+          "name": "keyword.hardware.event.iot",
+          "match": "\\b(rising|falling|change|press|release)\\b"
         }
       ]
     },
     "types": {
       "patterns": [
         {
-          "name": "storage.type.builtin.iot",
+          "name": "storage.type.builtin.fixed.iot",
           "match": "\\b(u8|u16|u32|u64|i8|i16|i32|i64|f32|f64)\\b"
         },
         {
-          "name": "storage.type.iot",
-          "match": "\\b(int|float|bool|char|str)\\b"
+          "name": "storage.type.builtin.iot",
+          "match": "\\b(int|uint|float|bool|str|char)\\b"
         }
       ]
     },
@@ -220,8 +218,12 @@
           "match": "\\b0[oO][0-7][0-7_]*\\b"
         },
         {
+          "name": "constant.numeric.float.scientific.iot",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*[eE][+-]?[0-9]+\\b"
+        },
+        {
           "name": "constant.numeric.float.iot",
-          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?\\b"
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b"
         },
         {
           "name": "constant.numeric.integer.iot",
@@ -232,20 +234,27 @@
     "functions": {
       "patterns": [
         {
-          "name": "entity.name.function.iot",
-          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()"
+          "name": "support.function.builtin.iot",
+          "match": "\\b(millis|micros|delay|delay_us|digitalRead|digitalWrite|pinMode|toggle|serialBegin|serialPrint|serialRead|serialAvailable|i2cBegin|i2cRead|i2cWrite|i2cScan|spiBegin|spiTransfer|pwmSetup|pwmWrite|pwmStop|sin|cos|tan|sqrt|abs|pow|floor|ceil|round|log|exp)\\s*(?=\\()"
         },
         {
-          "name": "support.function.stdlib.iot",
-          "match": "\\b(millis|micros|delay|delay_us|digitalRead|digitalWrite|pinMode|toggle|serialBegin|serialPrint|serialRead|serialAvailable|i2cBegin|i2cRead|i2cWrite|i2cScan|spiBegin|spiTransfer|pwmSetup|pwmWrite|pwmStop|sin|cos|tan|sqrt|abs|pow|floor|ceil|round|log|exp)\\s*(?=\\()"
+          "name": "entity.name.function.call.iot",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.call.iot" }
+          }
         }
       ]
     },
     "operators": {
       "patterns": [
         {
+          "name": "keyword.operator.assignment.compound.iot",
+          "match": "\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^="
+        },
+        {
           "name": "keyword.operator.assignment.iot",
-          "match": "\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|="
+          "match": "="
         },
         {
           "name": "keyword.operator.comparison.iot",
@@ -270,7 +279,11 @@
         {
           "name": "keyword.operator.member.iot",
           "match": "\\."
-        },
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
         {
           "name": "punctuation.terminator.iot",
           "match": ";"
@@ -280,16 +293,24 @@
           "match": ","
         },
         {
+          "name": "punctuation.section.braces.iot",
+          "match": "[\\{\\}]"
+        },
+        {
+          "name": "punctuation.section.parens.iot",
+          "match": "[\\(\\)]"
+        },
+        {
+          "name": "punctuation.section.brackets.iot",
+          "match": "[\\[\\]]"
+        },
+        {
           "name": "punctuation.definition.annotation.iot",
           "match": "@"
-        }
-      ]
-    },
-    "identifiers": {
-      "patterns": [
+        },
         {
-          "name": "variable.other.iot",
-          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+          "name": "punctuation.separator.colon.iot",
+          "match": ":"
         }
       ]
     }

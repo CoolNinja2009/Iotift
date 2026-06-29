@@ -5,7 +5,10 @@
   "version": "1.0.0",
   "publisher": "iotift",
   "license": "MIT",
-  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iotift/iotift"
+  },
   "engines": {
     "vscode": "^1.75.0"
   },
@@ -35,11 +38,7 @@
         "extensions": [
           ".iot"
         ],
-        "configuration": "./language-configuration.json",
-        "icon": {
-          "dark": "./icon.png",
-          "light": "./icon.png"
-        }
+        "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
