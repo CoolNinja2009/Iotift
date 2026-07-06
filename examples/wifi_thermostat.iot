@@ -14,49 +14,47 @@
 // ── Hardware ─────────────────────────────────────
 pin HEATER = output 4;
 pin COOLER = output 5;
+pin TEMP_SENSOR = analog 36;
 float target_temp = 22.5;
 
 // ── WiFi ─────────────────────────────────────────
 wifi home {
-    ssid: "MyWiFi";
-    password: "MyPassword";
-    hostname: "iotift-thermostat";
-    retry: forever;
-    connect_timeout: 30s;
+    ssid: "MyWiFi",
+    password: "MyPassword",
+    hostname: "iotift-thermostat",
+    retry: forever,
+    connect_timeout: 30s
 };
 
 // ── WiFi Events ──────────────────────────────────
 on home.got_ip {
-    println("Got IP address: " + home.ip);
+    println("Got IP address: {home.ip}");
 }
 
 on home.connect {
     println("WiFi connected!");
-    println("IP: " + home.ip);
-    println("RSSI: " + home.rssi);
+    println("IP: {home.ip}");
+    println("RSSI: {home.rssi}");
 }
 
 on home.disconnect {
     println("WiFi disconnected. Will retry...");
 }
 
-// ── Main loop ────────────────────────────────────
-tick {
-    // Read temperature sensor (simulated via analog pin)
-    float current = analogRead(A0);
+// ── Control loop ─────────────────────────────────
+every 1000 {
+    float current = TEMP_SENSOR.read();
     current = current * 3.3 / 4095.0;
     current = current * 100.0;
 
-    if current < target_temp - 0.5 {
-        HEATER = 1;
-        COOLER = 0;
+    if (current < target_temp - 0.5) {
+        HEATER.high();
+        COOLER.low();
+    } else if (current > target_temp + 0.5) {
+        HEATER.low();
+        COOLER.high();
     } else {
-        if current > target_temp + 0.5 {
-            HEATER = 0;
-            COOLER = 1;
-        } else {
-            HEATER = 0;
-            COOLER = 0;
-        }
+        HEATER.low();
+        COOLER.low();
     }
 }

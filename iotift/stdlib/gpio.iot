@@ -4,4 +4,3 @@
 extern fn digitalRead(int pin) -> int;
 extern fn digitalWrite(int pin, int value);
 extern fn pinMode(int pin, int mode);
-extern fn toggle(int pin);

@@ -1,0 +1,61 @@
+@device esp32
+
+pin LED_R = output 13;
+pin LED_G = output 14;
+pin LED_B = output 15;
+pin BTN = input 5 { pull: up, debounce: 50ms };
+
+enum State {
+    IDLE,
+    ACTIVE,
+    WARNING,
+    ERROR
+}
+
+int current = IDLE;
+int errors = 0;
+
+fn enter_state(int s) {
+    LED_R.low();
+    LED_G.low();
+    LED_B.low();
+
+    if (s == IDLE) {
+        LED_G.high();
+        println("-> IDLE");
+    } else if (s == ACTIVE) {
+        LED_B.high();
+        println("-> ACTIVE");
+    } else if (s == WARNING) {
+        LED_R.high();
+        println("-> WARNING");
+    } else if (s == ERROR) {
+        println("-> ERROR (count: {errors})");
+    }
+}
+
+on BTN.press {
+    if (current == IDLE) {
+        current = ACTIVE;
+        enter_state(current);
+    } else if (current == ACTIVE) {
+        current = WARNING;
+        enter_state(current);
+    } else if (current == WARNING) {
+        errors = errors + 1;
+        current = ERROR;
+        enter_state(current);
+    } else if (current == ERROR) {
+        LED_R.low();
+        current = IDLE;
+        enter_state(current);
+    }
+}
+
+tick {
+    enter_state(IDLE);
+}
+
+every 5000 {
+    println("State: {current}, Errors: {errors}");
+}

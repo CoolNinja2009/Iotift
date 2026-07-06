@@ -1,0 +1,36 @@
+@device esp32
+
+pin TEMP = analog 34;
+pin FAN = output 15;
+pin LED_R = output 13;
+pin LED_G = output 14;
+
+float current_temp = 0.0;
+float threshold = 30.0;
+bool cooling = false;
+
+every 1000 {
+    current_temp = TEMP.read() * (3.3 / 4095.0) * 100.0;
+    println("Temperature: {current_temp} C");
+
+    if (current_temp > threshold) {
+        FAN.high();
+        LED_R.high();
+        LED_G.low();
+        cooling = true;
+    } else {
+        FAN.low();
+        LED_R.low();
+        LED_G.high();
+        cooling = false;
+    }
+}
+
+on TEMP > 40.0 {
+    println("WARNING: Overheating! {current_temp} C");
+    LED_R.high();
+}
+
+on TEMP < 25.0 {
+    println("Temperature stable at {current_temp} C");
+}

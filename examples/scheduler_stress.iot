@@ -1,0 +1,88 @@
+@device esp32
+
+// Stress test: many concurrent timers, events, and state tracking
+pin LED1 = output 13;
+pin LED2 = output 14;
+pin BTN = input 5 { pull: up, debounce: 50ms };
+
+int tick_count = 0;
+int event_count = 0;
+bool system_active = true;
+int timer_a_count = 0;
+int timer_b_count = 0;
+int timer_c_count = 0;
+int timer_d_count = 0;
+float phase = 0.0;
+
+// Timer A: fast, stops itself after 100 ticks
+every 50 as timer_a {
+    timer_a_count = timer_a_count + 1;
+    if (timer_a_count >= 100) {
+        stop timer_a;
+        println("Timer A done: {timer_a_count} ticks");
+    }
+}
+
+// Timer B: medium speed, runs indefinitely
+every 200 as timer_b {
+    LED1.toggle();
+    timer_b_count = timer_b_count + 1;
+}
+
+// Timer C: slow, with conditional behavior
+every 1000 as timer_c {
+    timer_c_count = timer_c_count + 1;
+    if (system_active) {
+        phase = phase + 0.1;
+        if (phase > 6.283) {
+            phase = 0.0;
+        }
+    }
+}
+
+// Timer D: variable rate, demonstrates start/stop
+every 3000 as timer_d {
+    timer_d_count = timer_d_count + 1;
+    println("Timer D tick {timer_d_count}, total events: {event_count}");
+}
+
+// One-shot after startup
+after 5s {
+    println("5 second mark: system running with {timer_b_count} B ticks");
+}
+
+// Another one-shot
+after 20s {
+    println("20 second summary:");
+    println("  Timer A: {timer_a_count}");
+    println("  Timer B: {timer_b_count}");
+    println("  Timer C: {timer_c_count}");
+    println("  Timer D: {timer_d_count}");
+    println("  Events:  {event_count}");
+}
+
+// Button events
+on BTN.press {
+    event_count = event_count + 1;
+    LED2.high();
+    system_active = !system_active;
+    if (system_active) {
+        start timer_a;
+        println("System resumed");
+    } else {
+        stop timer_a;
+        stop timer_b;
+        LED1.low();
+        println("System paused");
+    }
+}
+
+on BTN.release {
+    LED2.low();
+}
+
+// Periodic status
+every 5000 {
+    tick_count = tick_count + 1;
+    println("Status #{tick_count}: A={timer_a_count} B={timer_b_count} C={timer_c_count} D={timer_d_count}");
+}

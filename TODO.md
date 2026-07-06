@@ -441,3 +441,313 @@ BLE (§9), MQTT (§10), HTTP (§11), Ethernet (§12), Cellular (§13).
 - [x] 8.23 — Tests: 69 new WiFi tests; all 500 existing tests still pass (569 total)
 - [x] 8.24 — Examples: wifi_thermostat.iot, wifi_scanner.iot
 - [x] 8.25 — Docs: README WiFi section, version → 2.1.0
+
+---
+
+## 🔴 MILESTONE 8.5 — IR Pipeline Bug Bash (Fix All Generated C)
+
+**Status:** Planning | **Branch:** `milestone-9-ir-bug-bash` | **Created:** 2026-06-29
+
+**Goal:** Every one of the 16 example `.iot` files compiles through the IR pipeline
+and emits **correct, compilable, working** C code. Zero new regressions on the 569
+existing tests.
+
+**Problem:** The IR pipeline (`ir_lowering.py` → `ir_codegen.py`) is the DEFAULT
+compilation path but was written as a first draft with several stubbed-out sections.
+The old direct codegen (`codegen.py`) handles most constructs correctly — the IR
+pipeline must be brought to parity. **All 16 generated .c files have bugs.**
+
+---
+
+### TIER 1 — Compile Failures (C code is syntactically invalid)
+
+- [ ] **9.1 — Pin method calls emit invalid C** (`LED.toggle()`, `FAN.high()`)
+  - `ir_lowering.py:1147-1164`: `MethodCall` → `IRCallIndirect(func_expr=f'{obj}.{method}()')`.
+    Pins are `uint8_t` constants (`LED_PIN = 2U`), not objects with methods.
+  - **Fix:** In `_lower_expr` for `MethodCall`, check if obj is a pin. Emit
+    `digitalWrite(pin, HIGH/LOW)` or `digitalWrite(pin, !digitalRead(pin))` for toggle.
+    Port logic from `codegen.py:920-928`.
+  - **Affected:** `simple_blink.c`, `button_led.c`, `temp_monitor.c`, `wifi_ap.c`,
+    `state_machine.c`, `math_stress.c`, `scheduler_stress.c`, `full_app.c`, `edge_cases.c`
+  - **Test:** `LED.toggle()` → `digitalWrite(LED_PIN, !digitalRead(LED_PIN));`
+
+- [ ] **9.2 — `bool` literals emit Python `True`/`False` (not C `true`/`false`)**
+  - `ir_codegen.py:700-712`: Python `bool` is subclass of `int`, so
+    `isinstance(False, (int, float))` is `True`, and `str(False)` → `"False"`.
+  - **Fix:** Check `isinstance(val, bool)` before `isinstance(val, (int, float))`,
+    or check ctype for bool before dispatching.
+  - **Affected:** `temp_monitor.c:64`, `scheduler_stress.c:63`
+  - **Test:** `bool cooling = false;` → `static bool cooling = false;`
+
+- [ ] **9.3 — WiFi events lowered as pin ISRs with `attachInterrupt` on undefined pins**
+  - `ir_lowering.py:341-437` `_lower_on_event` unconditionally creates ISR +
+    volatile flag + debounce + `attachInterrupt`. WiFi events are not pin-based.
+    No `scanner_PIN` or `primary_PIN` exists → link failure.
+  - **Fix:** In `_lower_on_event`, check if target is a WiFi interface
+    (look up in symbol table / wifi_decls). If so, skip ISR creation; WiFi events
+    dispatch from the WiFi event loop.
+  - **Affected:** `wifi_ap.c:188-189`, `wifi_scanner.c:175-177`, `full_app.c:681-683`
+  - **Test:** `on scanner.scan_done` → no `attachInterrupt` for `scanner_PIN`
+
+- [ ] **9.4 — Array declarations dropped to scalars (size lost)**
+  - `ir_lowering.py:146-151`: `ArrayDecl` → `IRGlobal(ctype=to_ctype(node.vtype))`
+    only stores element type (`"float"`), not array type (`"float[10]"`).
+    `IRGlobal` has no `array_size` field.
+  - **Fix:** Add `array_size: int = 0` to `IRGlobal`. Emit as `ctype name[size];`.
+    In `ArrayAccess` lowering, verify base is an array and emit `base[index]`.
+  - **Affected:** `full_app.c:118`, `struct_array.c:84`, `edge_cases.c` (missing `arr`)
+  - **Test:** `float[10] readings;` → `static float readings[10];`
+
+- [ ] **9.5 — `IRCallIndirect` dest temps not declared (undeclared C variables)**
+  - `ir_codegen.py:456-469` temp collection loop enumerates `IRBinary, IRUnary,
+    IRCall, IRCast, IRArrayAccess, IRMemberAccess, IRCopy` — but NOT `IRCallIndirect`.
+    All method-call result temps are used without declaration.
+  - **Fix:** Add `IRCallIndirect` to the `isinstance` check.
+  - **Affected:** Every file with method calls (pervasive)
+  - **Test:** Every temp variable used in a function appears in its declarations block
+
+- [ ] **9.6 — Duplicate function definitions (colliding names)**
+  - `ir_lowering.py:438-483` `_lower_on_threshold`: function name uses only pin name:
+    `f'_iotift_threshold_{node.pin}'`. Two thresholds on same pin → identical names.
+  - **Fix:** Include operator + value hash in name:
+    `f'_iotift_threshold_{node.pin}_{node.op}_{hash_value}'`
+  - **Affected:** `temp_monitor.c:104,117`, `full_app.c:482,495`
+  - **Test:** Two `on TEMP > X` and `on TEMP < Y` → two distinct function names
+
+- [ ] **9.7 — WiFi declarations silently dropped in IR pipeline**
+  - `ir_lowering.py:129-250` `_lower_top_level` has no handler for `WifiDecl`.
+    WiFi AST nodes are silently skipped. No state vars, no `WiFi.begin()`, no event dispatch.
+  - **Fix:** Add `isinstance(node, WifiDecl)` handler. Port logic from
+    `codegen.py:_collect_wifi_decl` and `_emit_wifi_*` methods. Generate:
+    WiFi state variables, system init function, event dispatch functions,
+    scan accessors, property accessor mapping.
+  - **Affected:** `wifi_ap.c`, `wifi_scanner.c`, `wifi_thermostat.c`, `full_app.c`
+  - **Test:** `wifi home = sta { ssid: "x"; password: "y"; }` → generates all WiFi boilerplate
+
+---
+
+### TIER 2 — Wrong Behavior (compiles but logic is incorrect)
+
+- [ ] **9.8 — `if`/`elif` lowering: body code emitted BEFORE condition check**
+  - `ir_lowering.py:830-869` `_lower_if` RETURNS the branch instruction as a list
+    but emits then/else bodies directly via builder INSIDE the method. The caller
+    emits the returned branch AFTER the bodies. Result: body code executes
+    unconditionally, condition check comes after.
+  - **Fix:** Rewrite `_lower_if` to collect ALL instructions (branch + bodies from
+    all blocks) and return as a flat list. Do NOT emit directly in `_lower_if`.
+    Alternatively: use a two-pass approach (build blocks first, linearize late).
+  - **Affected:** ~80% of all handler functions with `if` statements
+  - **Test:** `if (x > 5) { LED.high(); }` → condition check FIRST, body SECOND
+
+- [ ] **9.9 — `elif` chain lowering is stubbed out (garbage code)**
+  - `ir_lowering.py:850-862`: comment `# Actually need proper elif chaining —
+    simplify with merge`. Uses `id(ec)` for label names → nondeterministic labels
+    like `_iotift_elif_20655208267041`. Code ordering is scrambled.
+  - **Fix:** Lower elif chains as nested if/else within the else block.
+    Properly order: condition → then-body → jump to end → else/elif → ...
+  - **Affected:** `state_machine.c:85-109`, `full_app.c:297-328`, `edge_cases.c:108-143`
+  - **Test:** `if/else if/else if/else` chain → correct structured if/else-if/else
+
+- [ ] **9.10 — Type propagation broken: ALL temp variables typed as `int`**
+  - `ir_lowering.py:1057`: `_vv(node.name, 'int')` — Identifier always `'int'`
+  - `ir_lowering.py:1192`: `ctype = left.ctype if left.ctype else 'int'` — only left op
+  - `ir_lowering.py:1137`: `self.builder.new_temp('call', 'int')` — calls always `'int'`
+  - **Fix:** Thread `_resolved_type` from semantic analysis through IR lowering.
+    Use `node._resolved_type` to determine the real C type for each IRValue.
+  - **Affected:** Every file using float variables or float-returning functions
+  - **Test:** `float x = 3.14; float y = x * 2.0;` → `float _iotift_binopN` NOT `int`
+
+- [ ] **9.11 — Pin direction not propagated → analog/input pins set as OUTPUT**
+  - `ir.py:319`: `pins: Dict[str, int]` stores only pin number. Direction is lost.
+  - `ir_codegen.py:508-515`: hardcodes `_PIN_DIRECTION.get('output', 'OUTPUT')`
+    — ignores the pin's actual declared direction.
+  - **Fix:** Store `{'number': N, 'direction': 'analog'|'input'|'output'}` in
+    module pin registry. Use direction during `_emit_setup`.
+  - **Affected:** `temp_monitor.c:136`, `full_app.c:669-670`, `edge_cases.c:574-575`
+  - **Test:** `pin TEMP = analog 34;` → `pinMode(TEMP_PIN, INPUT);`
+
+- [ ] **9.12 — Debounce timestamp used uninitialized + body runs unconditionally**
+  - Caused by 9.8 (code ordering) + debounce update emitted outside the flag-check
+    block. When flag is not set, `_iotift_debounce_nowN` is uninitialized but still
+    assigned to the `_last` variable.
+  - **Fix:** Fixed automatically by 9.8 (correct block ordering)
+  - **Affected:** `button_led.c:97-101`, `scheduler_stress.c:267`, `full_app.c:448,474`
+  - **Test:** Debounce timestamp ONLY updated inside flag-check block
+
+- [ ] **9.13 — `break` placeholder `__break__` leaks into C output**
+  - `ir_lowering.py:720`: `return [IRJump('__break__')]` — placeholder never resolved
+    to actual loop-end label.
+  - **Fix:** Track loop end labels in the builder (stack of `(continue_label, break_label)`).
+    `break` → `IRJump(break_label)`, `continue` → `IRJump(continue_label)`.
+  - **Affected:** `edge_cases.c:192` (`goto __break__;`)
+  - **Test:** `break;` inside for/while → `goto _iotift_while_endN;`
+
+- [ ] **9.14 — String interpolation silently fails for non-`\w+` patterns**
+  - `ir_lowering.py:989`: regex `r'\{(\w+)\}'` only matches `[a-zA-Z0-9_]+`.
+    Fails for: `{millis()}`, `{wifi.ip}`, `{n + n}`, `{sin(f)}`, `{n * 2 + 1}`.
+  - **Fix:** At minimum, match `\{([^}]+)\}` and emit the expression directly.
+    For simple variable names, use `Serial.print(var)`. For complex expressions,
+    evaluate to temp first, then print. Reject unsupported patterns at semantic
+    check time with clear error.
+  - **Affected:** `button_led.c:139`, `wifi_ap.c:151`, `full_app.c:403,427`,
+    `edge_cases.c:339-345`
+  - **Test:** `println("IP: {wifi.ip}");` → `Serial.print("IP: "); Serial.println(wifi_ip);`
+
+- [ ] **9.15 — Missing return statements in functions**
+  - Caused by 9.8 (block ordering). `return` in then-block is emitted, but else-block
+    code is scrambled. Functions fall off the end without returning.
+  - **Fix:** Fixed automatically by 9.8 + 9.9
+  - **Affected:** `full_app.c:191,252,275`, `edge_cases.c:286`
+  - **Test:** Every non-void function has explicit `return` on all control paths
+
+- [ ] **9.16 — Struct field access emits member access on string literal**
+  - `edge_cases.c:385-386`: `_iotift_member63 = "cs".value;` — struct variable `cs`
+    accessed via string literal `"cs"`. Same root cause as 9.6 (WiFi member access
+    on string literal).
+  - **Fix:** Fix identifier lowering for struct variables. In `_lower_assign` for
+    `MemberAccess` target, lower to `IRStore` correctly: `cs.value = ...` → 
+    `cs.value = ...` in C, not `"cs".value = ...`.
+  - **Affected:** `edge_cases.c:385-386`
+  - **Test:** `cs.value` → `cs.value` in C (no quotes around struct name)
+
+---
+
+### TIER 3 — Code Quality & Robustness
+
+- [ ] **9.17 — `<math.h>` included unconditionally, often duplicated**
+  - `math.iot` prelude line 4: `c header { #include <math.h> }` injected for ALL
+    files via the prelude auto-import. `ir_codegen.py:210-211` adds it AGAIN when
+    math calls are detected. `led.c`, `math_stress.c`, `full_app.c`, `struct_array.c`
+    have it twice. `edge_cases.c` has it THREE times.
+  - **Fix:** Remove `c header { #include <math.h> }` from `math.iot` prelude.
+    Let codegen add `<math.h>` only when `uses_math` is true. Deduplicate includes.
+  - **Affected:** ALL 16 generated .c files
+  - **Test:** `simple_blink.iot` → no `<math.h>`. `led.iot` → single `<math.h>`
+
+- [ ] **9.18 — Bogus `extern` declarations with wrong signatures from prelude**
+  - Stdlib prelude auto-imports `time.iot`, `math.iot`, `gpio.iot` for every file:
+    - `time.iot:4`: `extern fn millis() -> int;` — returns `unsigned long`, not `int`
+    - `gpio.iot:7`: `extern fn toggle(int pin);` — `toggle()` does NOT exist in Arduino
+  - **Fix:** 
+    - `time.iot`: `extern fn millis() -> u32;`
+    - `gpio.iot`: Remove `toggle`. Pin toggle is lowered to `digitalWrite(pin, !digitalRead(pin))`
+    - Don't emit `extern` for functions already declared by `<Arduino.h>`
+  - **Affected:** ALL 16 files
+  - **Test:** Generated C has no `extern int millis(void);` or `extern void toggle(int pin);`
+
+- [ ] **9.19 — `after` block: fire-body code unreachable (goto ordering)**
+  - `ir_lowering.py:572-639` `_lower_after_block` + `_is_simple_if_else` detection
+    causes fire-block code to appear after the goto in the body block, making it
+    look unreachable in source (though it's in the binary via label).
+  - **Fix:** Expand `_is_simple_if_else` in `ir_codegen.py` to handle the 4-block
+    pattern: entry → body → fire → end. Emit properly structured `if/else`.
+  - **Affected:** `wifi_ap.c:170-174`, `scheduler_stress.c:217-221`, `full_app.c:618-654`
+  - **Test:** `after 5s { LED.high(); }` → fire block code reachable, in correct order
+
+- [ ] **9.20 — `goto` spaghetti instead of structured control flow**
+  - `ir_codegen.py:762-770` `_is_simple_if_else`: only matches exact 3-block patterns
+    with entry branch. Everything else emits raw goto+labels.
+  - **Fix:** Expand structured flow detection for: if/else-if/else, while, for,
+    after blocks. Use dominator-tree analysis for general case. Fall back to
+    goto only when control flow is irreducible.
+  - **Affected:** ALL complex files
+  - **Test:** All control flow → structured `if`/`else`/`while`/`for` (no `goto`)
+
+- [ ] **9.21 — `start timer_a;` — Iotift syntax leaks into C**
+  - `ir_lowering.py:_lower_stmt` has no handler for `StartStmt` AST node.
+    Falls through to string-representation fallback → raw `start timer_a;` in C.
+  - **Fix:** Add `StartStmt` handler: set the timer's active flag to 1.
+    `IRCopy(_cv(1, 'int'), _gv(active_var, 'int'))`.
+  - **Affected:** `scheduler_stress.c:258`
+  - **Test:** `start timer_a;` → `_iotift_every_timer_a_active = 1;`
+
+- [ ] **9.22 — While-loop end block creates infinite loop**
+  - `ir_lowering.py:871-896` `_lower_while`: end-block emits `IRJump(cond_label)`
+    as fallthrough. The end block has no body; the body block already jumps back
+    to condition. Result: `goto _iotift_while_condN;` at end-block position
+    creates a spin loop.
+  - **Fix:** End block should emit `IRReturn()` or nothing (if already terminated).
+    The body block already handles the back-edge.
+  - **Affected:** `full_app.c:212`, `struct_array.c:111,154`, `edge_cases.c:201,232`
+  - **Test:** While loop ends cleanly; no duplicate `goto cond` after the loop
+
+- [ ] **9.23 — `Serial.begin()` called twice in setup**
+  - `edge_cases.c:572,582`: `Serial.begin(115200UL);` and `Serial.begin(115200);`
+    — one from the Iotift default, one from user code.
+  - **Fix:** Deduplicate `Serial.begin` calls. If user code has `Serial.begin`,
+    suppress the auto-generated one.
+  - **Affected:** `edge_cases.c`
+  - **Test:** Only one `Serial.begin()` call in setup
+
+---
+
+### Stdlib / Prelude Fixes
+
+- [ ] **9.24 — Fix `time.iot` prelude: `millis()` return type**
+  - `extern fn millis() -> int;` → `extern fn millis() -> u32;`
+  - Arduino `millis()` returns `unsigned long` (32-bit on ESP32)
+
+- [ ] **9.25 — Fix `gpio.iot` prelude: remove nonexistent `toggle()`**
+  - `extern fn toggle(int pin);` — does not exist in Arduino
+  - Pin toggle is an Iotift built-in, lowered to `digitalWrite(pin, !digitalRead(pin))`
+
+- [ ] **9.26 — Fix `math.iot` prelude: remove unconditional `<math.h>` injection**
+  - Remove `c header { #include <math.h> }` line
+  - Let codegen add `<math.h>` only when `uses_math` is true
+
+---
+
+### Verification
+
+- [ ] **9.27 — Compile check: all 16 examples produce valid C syntax**
+  - Build each `.iot` file through the IR pipeline
+  - Verify zero C syntax errors (at minimum: `gcc -fsyntax-only` equivalent check)
+  - Verify: no Python `True`/`False`, no `"name".method()`, no `__break__`,
+    no duplicate function names, no undeclared variables
+
+- [ ] **9.28 — Correctness check: generated C matches intent**
+  - `simple_blink.c`: LED toggle via `digitalWrite` + `digitalRead`
+  - `temp_monitor.c`: condition before body, analog → INPUT, `False` → `false`
+  - `state_machine.c`: `enter_state` has correct if/elif chain, no goto spaghetti
+  - `math_stress.c`: float temps have `float` type, `clamp()` returns correctly
+  - `wifi_scanner.c`: WiFi events dispatch correctly, no pin ISRs for WiFi
+  - `full_app.c`: WiFi init present, arrays have sizes, analog pins INPUT
+  - `scheduler_stress.c`: `true` (not `True`), `start` → active flag
+  - `edge_cases.c`: `break` resolves, struct access on real vars
+
+- [ ] **9.29 — Regression: all 569 existing tests pass**
+  - `python -m pytest tests/ -v`
+  - Direct codegen (`--direct-codegen`) still works for all examples
+  - No new warnings from semantic analysis
+
+- [ ] **9.30 — Rebuild all 16 example .c files**
+  - Run `python iotift.py build examples/<name>.iot` for each
+  - Verify output in `examples/<name>.c`
+  - Git diff shows improvements, not regressions
+
+---
+
+### Implementation Order
+
+```
+Phase A (control flow):  9.8 → 9.9 → 9.13 → 9.22 → 9.19 → 9.20
+Phase B (expressions):   9.1 → 9.10 → 9.2 → 9.5
+Phase C (declarations):  9.4 → 9.7 → 9.3 → 9.11 → 9.6
+Phase D (quality):       9.14 → 9.16 → 9.21 → 9.23
+Phase E (prelude):       9.17 → 9.18 → 9.24 → 9.25 → 9.26
+Phase F (verify):        9.27 → 9.28 → 9.29 → 9.30
+```
+
+Phase A first because control-flow bugs cascade into ~50% of all other issues.
+
+### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `ir_lowering.py` | Rewrite `_lower_if`, `_lower_elif`; add `StartStmt`; fix `MethodCall` for pins; thread types from semantic analysis; add `WifiDecl` lowering; fix `_lower_on_event` for WiFi targets; fix array sizes; fix break/continue; fix `_lower_on_threshold` naming; fix `_lower_while` end block |
+| `ir_codegen.py` | Fix `_value_c` bool handling; expand `_is_simple_if_else` + `_emit_structured_if`; add `IRCallIndirect` to temp collection; fix `_emit_setup` pin directions; add array type emission; deduplicate includes/`Serial.begin` |
+| `ir.py` | Add `array_size` to `IRGlobal`; add direction to pin registry; add WiFi fields to `IRModule` |
+| `iotift/stdlib/time.iot` | Fix `millis()` return type: `int` → `u32` |
+| `iotift/stdlib/gpio.iot` | Remove `extern fn toggle(int pin);` |
+| `iotift/stdlib/math.iot` | Remove `c header { #include <math.h> }` |
+| `codegen.py` | Reference only — the working "gold standard" to port from |

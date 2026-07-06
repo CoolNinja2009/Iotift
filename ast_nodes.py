@@ -388,6 +388,12 @@ class StopStmt(Node):
 
 
 @dataclass
+class StartStmt(Node):
+    """start blinker;  —  resumes a named every-block."""
+    label: str = ''
+
+
+@dataclass
 class PrintStmt(Node):
     """
     print("hello");

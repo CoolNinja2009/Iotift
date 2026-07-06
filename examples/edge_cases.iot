@@ -1,0 +1,302 @@
+@device esp32
+
+// =============================================================================
+// EDGE CASES STRESS TEST
+// Exercises corner cases of every language feature
+// =============================================================================
+
+// ── Volatile and const variables ────────────────────────────────────
+volatile int shared_flag = 0;
+const int MAX_RETRIES = 3;
+const float PI = 3.14159;
+
+// ── Pins with all direction types ───────────────────────────────────
+pin DOUT = output 13;
+pin DIN  = input 5 { pull: up, debounce: 50ms };
+pin APIN = analog 34;
+pin PPWM = pwm 12;
+
+// ── PWM Setup ───────────────────────────────────────────────────────
+PPWM.setup(5000, 12);
+
+// ── Struct with all field types ─────────────────────────────────────
+struct ComplexStruct {
+    int id;
+    float value;
+    bool flag;
+}
+
+// ── Enum with explicit values ───────────────────────────────────────
+enum ErrorCode {
+    OK = 0,
+    WARN = 10,
+    ERR_TIMEOUT = 100,
+    ERR_OVERFLOW = 200
+}
+
+// ── Global struct instance ──────────────────────────────────────────
+ComplexStruct cs;
+int retry_count = 0;
+int deep_result = 0;
+
+// ── Deeply nested if/else ───────────────────────────────────────────
+fn deep_nesting(int x) -> int {
+    if (x > 100) {
+        if (x > 200) {
+            if (x > 300) {
+                if (x > 400) {
+                    if (x > 500) {
+                        return 5;
+                    } else {
+                        return 4;
+                    }
+                } else {
+                    return 3;
+                }
+            } else {
+                return 2;
+            }
+        } else {
+            return 1;
+        }
+    } else {
+        if (x < 0) {
+            if (x < -100) {
+                if (x < -200) {
+                    return -3;
+                } else {
+                    return -2;
+                }
+            } else {
+                return -1;
+            }
+        } else {
+            return 0;
+        }
+    }
+}
+
+// ── Complex boolean logic ───────────────────────────────────────────
+fn bool_expression(int a, int b, int c, bool flag) -> int {
+    if (flag && (a > b || c < 0) && !(a == 0)) {
+        return a + b + c;
+    } else if (!flag && (a < b && c > 0) || (a == b)) {
+        return a * b;
+    }
+    return deep_nesting(a);
+}
+
+// ── While loop with break (break directly in loop body) ─────────────
+fn loop_with_flow_control() -> int {
+    int count = 0;
+    int sum = 0;
+
+    while (count < 50) {
+        count = count + 1;
+        if (count > 40) {
+            break;
+        }
+        sum = sum + count;
+    }
+    return sum;
+}
+
+// ── For loop with complex body ──────────────────────────────────────
+fn for_loop_sum(int n) -> int {
+    int total = 0;
+    int i = 0;
+    while (i < n) {
+        if (i % 2 == 0) {
+            total = total + i;
+        } else {
+            total = total - i;
+        }
+        i = i + 1;
+    }
+    return total;
+}
+
+// ── Loop block (infinite loop with internal break) ──────────────────
+fn loop_with_condition() -> int {
+    int i = 0;
+    int result = 0;
+    loop {
+        i = i + 1;
+        result = result + i;
+        if (i >= 20) {
+            break;
+        }
+    }
+    return result;
+}
+
+// ── Type casting expressions ────────────────────────────────────────
+fn cast_examples(float f, int n) -> float {
+    int a = f as int;
+    float b = n as float;
+    float c = (a as float) * b + (n as float);
+    return c;
+}
+
+// ── Extern function declaration ─────────────────────────────────────
+extern fn external_init() -> int;
+extern fn external_process(int x) -> float;
+
+// ── ISR function ────────────────────────────────────────────────────
+isr fn emergency_shutdown() {
+    DOUT.low();
+    PPWM.write(0);
+    shared_flag = 1;
+}
+
+// ── Early return patterns ───────────────────────────────────────────
+fn early_return_test(int x) -> int {
+    if (x < 0) {
+        return -1;
+    }
+    if (x == 0) {
+        return 0;
+    }
+    if (x < 10) {
+        return x * 2;
+    }
+    if (x < 100) {
+        return x * 3;
+    }
+    return x * 4;
+}
+
+// ── Math-heavy function ─────────────────────────────────────────────
+fn math_heavy(float t) -> float {
+    float s = sin(t);
+    float c = cos(t);
+    float result = pow(s, 2.0) + pow(c, 2.0);
+
+    if (abs(result - 1.0) < 0.001) {
+        result = 1.0;
+    }
+
+    float phase = atan2(s, c);
+    float scaled = map(phase, -3.14159, 3.14159, 0.0, 255.0);
+
+    return clamp(scaled, 0.0, 255.0);
+}
+
+// ── String interpolation stress ─────────────────────────────────────
+fn string_test(int n, float f, bool b) {
+    println("Int: {n}, Float: {f}, Bool: {b}");
+    println("Expression: {n * 2 + 1}");
+    println("Nested call: {sin(f)}");
+    println("Multiple: {n} + {n} = {n + n}");
+}
+
+// ── Array manipulation ──────────────────────────────────────────────
+fn array_operations() -> int {
+    int arr[5];
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    arr[3] = 40;
+    arr[4] = 50;
+
+    int sum = 0;
+    int i = 0;
+    while (i < 5) {
+        sum = sum + arr[i];
+        i = i + 1;
+    }
+    return sum;
+}
+
+// ── Struct field access ─────────────────────────────────────────────
+fn struct_usage() -> float {
+    cs.id = 42;
+    cs.value = 3.14;
+    cs.flag = true;
+
+    float val = cs.value * (cs.id as float);
+    return val;
+}
+
+// ── Combined everything ─────────────────────────────────────────────
+fn combined_test(float in_val) -> float {
+    float val = clamp(in_val, 0.0, 100.0);
+
+    if (shared_flag == 1) {
+        return 0.0;
+    }
+
+    int k = 0;
+    while (k < MAX_RETRIES) {
+        val = val * 1.1;
+        if (val > 1000.0) {
+            k = MAX_RETRIES;
+        }
+        k = k + 1;
+    }
+
+    int loop_result = loop_with_flow_control();
+    int arr_sum = array_operations();
+    float struct_val = struct_usage();
+    float math_val = math_heavy(val * 0.01);
+    int deep_val = deep_nesting(loop_result);
+
+    return val + (loop_result as float) + (arr_sum as float) + struct_val + math_val + (deep_val as float);
+}
+
+// ── Event handlers ──────────────────────────────────────────────────
+
+on DOUT.high {
+    retry_count = retry_count + 1;
+    if (retry_count > MAX_RETRIES) {
+        DOUT.low();
+        retry_count = 0;
+    }
+}
+
+on APIN > 50.0 {
+    shared_flag = 1;
+    println("Threshold exceeded!");
+}
+
+// ── Timer callbacks ─────────────────────────────────────────────────
+
+every 100 as edge_timer_1 {
+    DOUT.toggle();
+}
+
+after 500ms {
+    DOUT.low();
+}
+
+every 1000 as edge_timer_2 {
+    PPWM.write(512);
+    after 200ms {
+        PPWM.write(0);
+    }
+}
+
+// ── tick block ──────────────────────────────────────────────────────
+tick {
+    shared_flag = 0;
+}
+
+// ── Defer blocks ────────────────────────────────────────────────────
+defer {
+    DOUT.low();
+    PPWM.write(0);
+}
+
+// ── Raw C injection ─────────────────────────────────────────────────
+c header {
+    #include <math.h>
+}
+
+c setup {
+    Serial.begin(115200);
+    Serial.println("Edge cases test ready.");
+}
+
+c loop {
+    // Custom C code runs alongside Iotift scheduler
+}

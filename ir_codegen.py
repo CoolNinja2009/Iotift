@@ -195,6 +195,8 @@ class IRCodeGen:
 
     def _emit_includes(self, module: IRModule) -> None:
         self._lines.append('#include <Arduino.h>')
+        if module.has_wifi:
+            self._lines.append('#include <WiFi.h>')
         # Check for math function usage across all functions
         uses_math = module.uses_math
         if not uses_math:
@@ -207,10 +209,15 @@ class IRCodeGen:
                         ):
                             uses_math = True
                             break
+        # Only emit math.h if actually needed and not already present
         if uses_math:
-            self._lines.append('#include <math.h>')
+            # Check that math.h isn't already in header_blocks or global_blocks
+            all_c_blocks = '\n'.join(module.header_blocks + module.global_blocks)
+            if '#include <math.h>' not in all_c_blocks:
+                self._lines.append('#include <math.h>')
         for inc in sorted(module.includes):
-            self._lines.append(inc)
+            if inc not in self._lines:
+                self._lines.append(inc)
         for code in module.header_blocks:
             self._lines.append(_dedent(code))
         if module.header_blocks:
@@ -294,11 +301,16 @@ class IRCodeGen:
             if g.is_volatile:
                 qualifiers.append('volatile')
             prefix = ' '.join(qualifiers) + ' ' if qualifiers else ''
+            # Handle array types
+            if g.array_size > 0:
+                type_str = f'{g.ctype} {g.name}[{g.array_size}]'
+            else:
+                type_str = f'{g.ctype} {g.name}'
             if g.init is not None:
                 init_str = self._value_c(g.init)
-                self._lines.append(f'{prefix}{g.ctype} {g.name} = {init_str};')
+                self._lines.append(f'{prefix}{type_str} = {init_str};')
             else:
-                self._lines.append(f'{prefix}{g.ctype} {g.name};')
+                self._lines.append(f'{prefix}{type_str};')
         self._lines.append('')
 
     def _emit_scheduler(self, module: IRModule) -> None:
@@ -453,19 +465,16 @@ class IRCodeGen:
         self._lines.append(f'{sig} {{')
 
         # Emit local variable declarations (collect from blocks)
-        temp_vars: set = set()
+        temp_vars: Dict[str, IRValue] = {}
         for bb in fn.blocks:
             for instr in bb.instructions:
-                if isinstance(instr, (IRBinary, IRUnary, IRCall, IRCast, IRArrayAccess, IRMemberAccess)):
-                    if instr.dest and instr.dest.kind == 'temp':
-                        temp_vars.add(instr.dest)
-                elif isinstance(instr, IRCopy):
-                    if instr.dest.kind == 'temp':
-                        temp_vars.add(instr.dest)
-                    if instr.src.kind == 'temp':
-                        temp_vars.add(instr.src)
+                for field in ['dest', 'src', 'left', 'right', 'operand']:
+                    val = getattr(instr, field, None)
+                    if isinstance(val, IRValue) and val.kind == 'temp':
+                        if val.name not in temp_vars:
+                            temp_vars[val.name] = val
 
-        for tv in sorted(temp_vars, key=lambda v: v.name):
+        for tv in sorted(temp_vars.values(), key=lambda v: v.name):
             self._lines.append(f'  {tv.ctype} {tv.name};')
 
         # Emit declared locals
@@ -475,40 +484,473 @@ class IRCodeGen:
         if temp_vars or fn.locals:
             self._lines.append('')
 
-        # Use structured if/else for simple branch patterns
+        # Emit function body using CFG-based structured traversal
         blocks = fn.blocks
-        if self._is_simple_if_else(blocks):
-            self._emit_structured_if(blocks)
-        else:
-            for bb in blocks:
-                if bb.label != fn.entry_block and bb.label:
+        if not blocks:
+            self._lines.append('}')
+            self._lines.append('')
+            return
+
+        entry_label = fn.entry_block or blocks[0].label
+        labels, succ, pred = self._build_cfg(blocks)
+        order, back_edges = self._dfs_order(entry_label, labels, succ)
+
+        # Find all loop headers (targets of back-edges)
+        loop_headers = {tgt for _, tgt in back_edges}
+
+        # Build the set of ALL labels targeted by IRJump instructions.
+        # These must be emitted as proper C labels (not comments) so that
+        # 'goto target;' statements have a valid landing point.
+        jump_targets: set = set()
+        for bb in blocks:
+            for instr in bb.instructions:
+                if isinstance(instr, IRJump):
+                    jump_targets.add(instr.label)
+                elif isinstance(instr, IRBranch):
+                    jump_targets.add(instr.true_label)
+                    jump_targets.add(instr.false_label)
+        # Also add loop headers (back-edge targets must be labels too)
+        jump_targets.update(loop_headers)
+        # Add no_inline_targets - labels that will get gotos for merge points
+        # Build during traversal, so collect from blocks as fallthrough targets
+        for bb in blocks:
+            for instr in bb.instructions:
+                if isinstance(instr, IRJump) and instr.label not in loop_headers:
+                    jump_targets.add(instr.label)
+
+        emitted = set()
+        # For loop headers, emit as while(1) { ... } with break/goto inside
+        # For now, emit loop headers as raw goto blocks
+        self._emit_cfg_region(entry_label, labels, succ, pred,
+                             order, back_edges, emitted, 1, loop_headers,
+                             jump_targets=jump_targets)
+
+        # Emit any remaining unvisited blocks (e.g., merge points not reached by
+        # structured traversal). Emit proper C labels for jump targets.
+        for bb in blocks:
+            if bb.label not in emitted:
+                if bb.label in jump_targets:
+                    self._lines.append(f'  {bb.label}:')
+                else:
                     self._lines.append(f'  // {bb.label}')
                 for instr in bb.instructions:
-                    # Track source line from IR instruction
-                    if hasattr(instr, 'line') and instr.line > 0:
-                        self._track_source(instr.line)
                     c_line = self._instr_c(instr)
                     if c_line:
                         self._lines.append(f'  {c_line}')
-                        self._record_mapping(len(self._lines) - 1)
 
         self._lines.append('}')
         self._lines.append('')
+
+    def _build_cfg(self, blocks):
+        """Build CFG maps from blocks: (labels, successors, predecessors)."""
+        labels = {bb.label: bb for bb in blocks}
+        succ = {}
+        pred = {}
+        for bb in blocks:
+            lbl = bb.label
+            succ[lbl] = []
+            term = bb.terminator
+            if isinstance(term, IRBranch):
+                succ[lbl] = [term.true_label, term.false_label]
+            elif isinstance(term, IRJump):
+                succ[lbl] = [term.label]
+        for bb in blocks:
+            lbl = bb.label
+            if lbl not in pred:
+                pred[lbl] = []
+        for src, targets in succ.items():
+            for tgt in targets:
+                if tgt not in pred:
+                    pred[tgt] = []
+                if src not in pred[tgt]:
+                    pred[tgt].append(src)
+        return labels, succ, pred
+
+    def _dfs_order(self, entry_label, labels, succ):
+        """Compute DFS visit order and detect back-edges.
+
+        Returns (order: dict[label→int], back_edges: set[(src, tgt)]).
+        """
+        order = {}
+        counter = [0]
+        on_stack = set()
+        back_edges = set()
+
+        def dfs(label):
+            if label not in labels:
+                return
+            if label not in order:
+                order[label] = counter[0]
+                counter[0] += 1
+                on_stack.add(label)
+                for tgt in succ.get(label, []):
+                    if tgt in on_stack:
+                        back_edges.add((label, tgt))
+                    elif tgt not in order:
+                        dfs(tgt)
+                on_stack.discard(label)
+
+        dfs(entry_label)
+        # Also process any unvisited blocks
+        for lbl in labels:
+            if lbl not in order:
+                dfs(lbl)
+        return order, back_edges
+
+    def _emit_cfg_region(self, label, labels, succ, pred, order, back_edges,
+                         emitted, indent, loop_headers=None,
+                         no_inline_targets=None, jump_targets=None):
+        """Recursively emit a CFG region as structured C.
+
+        Uses goto-based emission as the primary strategy (simple and correct).
+        Structured if/else is used only for simple patterns that guarantee correctness.
+
+        Args:
+            no_inline_targets: set of label names that should NOT be inlined when
+                               reached via IRJump. Used by structured if to prevent
+                               the merge/else block from being pulled inside the if body.
+            jump_targets: set of ALL labels that are targeted by any IRJump or IRBranch.
+                          These are emitted as proper C labels (not comments).
+        """
+        if loop_headers is None:
+            loop_headers = set()
+        if no_inline_targets is None:
+            no_inline_targets = set()
+        if jump_targets is None:
+            jump_targets = set()
+
+        if label in emitted or label not in labels:
+            return
+
+        emitted.add(label)
+        bb = labels[label]
+        term = bb.terminator
+        indent_str = '  ' * indent
+
+        # Emit label as proper C label if it's a target of any branch/jump,
+        # otherwise as a comment for readability.
+        if label in jump_targets:
+            self._lines.append(f'{indent_str}{label}:')
+        else:
+            self._lines.append(f'{indent_str}// {label}')
+
+        # Emit body instructions (up to first terminator)
+        body_instrs = []
+        for instr in bb.instructions:
+            if isinstance(instr, (IRBranch, IRJump, IRReturn)):
+                term = instr
+                break
+            body_instrs.append(instr)
+
+        for instr in body_instrs:
+            if hasattr(instr, 'line') and instr.line > 0:
+                self._track_source(instr.line)
+            c_line = self._instr_c(instr)
+            if c_line:
+                self._lines.append(f'{indent_str}{c_line}')
+                self._record_mapping(len(self._lines) - 1)
+
+        if term is None:
+            # Fall-through: continue to any unvisited successor
+            for tgt in succ.get(label, []):
+                if tgt not in emitted:
+                    self._emit_cfg_region(tgt, labels, succ, pred,
+                                         order, back_edges, emitted, indent,
+                                         loop_headers, no_inline_targets, jump_targets)
+            return
+
+        if isinstance(term, IRReturn):
+            self._lines.append(f'{indent_str}{self._instr_c(term)}')
+            return
+
+        if isinstance(term, IRJump):
+            target = term.label
+            is_back_edge = (label, target) in back_edges or target in loop_headers
+            if is_back_edge:
+                # Back-edge to loop header — emit goto to form the loop
+                self._lines.append(f'{indent_str}goto {target};')
+                return
+            if target in no_inline_targets:
+                # Don't inline this target (structured if merge point)
+                # Emit goto and let the target be visited separately
+                self._lines.append(f'{indent_str}goto {target};')
+                return
+            if target not in emitted:
+                # Forward jump — inline the target block
+                self._emit_cfg_region(target, labels, succ, pred,
+                                     order, back_edges, emitted, indent,
+                                     loop_headers, no_inline_targets, jump_targets)
+            else:
+                # Jump to already emitted block — emit goto
+                self._lines.append(f'{indent_str}goto {target};')
+            return
+
+        if isinstance(term, IRBranch):
+            cond = self._value_c(term.cond)
+            true_label = term.true_label
+            false_label = term.false_label
+
+            # Try structured if/else for simple patterns
+            true_path = labels.get(true_label)
+            false_path = labels.get(false_label)
+
+            true_is_return = (true_path and isinstance(true_path.terminator, IRReturn))
+            true_is_jump = (true_path and isinstance(true_path.terminator, IRJump))
+            false_is_return = (false_path and isinstance(false_path.terminator, IRReturn))
+
+            # Simple guard: if (cond) { return X; } then continue
+            if true_is_return and not false_is_return:
+                self._lines.append(f'{indent_str}if ({cond}) {{')
+                self._emit_cfg_region(true_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent + 1,
+                                     loop_headers, no_inline_targets, jump_targets)
+                self._lines.append(f'{indent_str}}}')
+                if false_label not in emitted:
+                    self._emit_cfg_region(false_label, labels, succ, pred,
+                                         order, back_edges, emitted, indent,
+                                         loop_headers, no_inline_targets, jump_targets)
+                return
+
+            # Simple if/else: both branches return
+            if true_is_return and false_is_return:
+                self._lines.append(f'{indent_str}if ({cond}) {{')
+                self._emit_cfg_region(true_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent + 1,
+                                     loop_headers, no_inline_targets, jump_targets)
+                self._lines.append(f'{indent_str}}} else {{')
+                self._emit_cfg_region(false_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent + 1,
+                                     loop_headers, no_inline_targets, jump_targets)
+                self._lines.append(f'{indent_str}}}')
+                return
+
+            # Simple if with merge: if (cond) { ... } then continuation
+            # Check if true path merges back to false path (no else)
+            if not false_is_return and self._reaches(true_label, false_label,
+                                                     labels, succ, back_edges, set()):
+                self._lines.append(f'{indent_str}if ({cond}) {{')
+                # Prevent inlining of the merge point (false_label) from inside
+                # the then-block's IRJump. This keeps the merge point code AFTER
+                # the if body, not inside it.
+                self._emit_cfg_region(true_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent + 1,
+                                     loop_headers,
+                                     no_inline_targets=no_inline_targets | {false_label},
+                                     jump_targets=jump_targets)
+                self._lines.append(f'{indent_str}}}')
+                if false_label not in emitted:
+                    self._emit_cfg_region(false_label, labels, succ, pred,
+                                         order, back_edges, emitted, indent,
+                                         loop_headers, no_inline_targets, jump_targets)
+                return
+
+            # elif chain detection
+            if true_is_jump and false_path and isinstance(false_path.terminator, IRBranch):
+                # Extract the merge point (end label) from the true path's IRJump.
+                # Both the false_label (elif chain) AND the merge point (end)
+                # must be blocked from inlining to keep continuation code AFTER
+                # the if body, not inside it.
+                true_jump_target = true_path.terminator.label
+                self._lines.append(f'{indent_str}if ({cond}) {{')
+                self._emit_cfg_region(true_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent + 1,
+                                     loop_headers,
+                                     no_inline_targets=no_inline_targets | {false_label, true_jump_target},
+                                     jump_targets=jump_targets)
+                # Close the if body; _emit_cfg_else_chain will emit 'else if' or 'else'
+                self._lines.append(f'{indent_str}}}')
+                if false_label not in emitted:
+                    self._emit_cfg_else_chain(false_label, labels, succ, pred,
+                                              order, back_edges, emitted, indent,
+                                              loop_headers, no_inline_targets, jump_targets,
+                                              merge_target=true_jump_target)
+                return
+
+            # If true path is jump and false path is jump: structured if/else
+            if true_is_jump and false_path and isinstance(false_path.terminator, IRJump):
+                true_jump_target = true_path.terminator.label
+                self._lines.append(f'{indent_str}if ({cond}) {{')
+                self._emit_cfg_region(true_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent + 1,
+                                     loop_headers,
+                                     no_inline_targets=no_inline_targets | {false_label, true_jump_target},
+                                     jump_targets=jump_targets)
+                self._lines.append(f'{indent_str}}} else {{')
+                self._emit_cfg_region(false_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent + 1,
+                                     loop_headers, no_inline_targets, jump_targets)
+                self._lines.append(f'{indent_str}}}')
+                return
+
+            # Fallback: goto-based branch (always correct)
+            self._lines.append(
+                f'{indent_str}if ({cond}) goto {true_label}; else goto {false_label};'
+            )
+            if true_label not in emitted:
+                self._emit_cfg_region(true_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent,
+                                     loop_headers, no_inline_targets, jump_targets)
+            if false_label not in emitted:
+                self._emit_cfg_region(false_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent,
+                                     loop_headers, no_inline_targets, jump_targets)
+            return
+
+    def _emit_cfg_else_chain(self, label, labels, succ, pred, order, back_edges,
+                             emitted, indent, loop_headers=None,
+                             no_inline_targets=None, jump_targets=None,
+                             merge_target=None):
+        """Emit the 'else if' chain from a branch point.
+
+        Args:
+            merge_target: The end label (merge point) that all elif/else body IRJumps
+                          target. This is blocked from inlining inside the bodies.
+        """
+        if loop_headers is None:
+            loop_headers = set()
+        if no_inline_targets is None:
+            no_inline_targets = set()
+        if jump_targets is None:
+            jump_targets = set()
+
+        if label in emitted or label not in labels:
+            return
+
+        emitted.add(label)
+        bb = labels[label]
+        term = bb.terminator
+        indent_str = '  ' * indent
+
+        # Emit body instructions (condition computation for elif)
+        body_instrs = []
+        for instr in bb.instructions:
+            if isinstance(instr, (IRBranch, IRJump, IRReturn)):
+                term = instr
+                break
+            body_instrs.append(instr)
+
+        for instr in body_instrs:
+            c_line = self._instr_c(instr)
+            if c_line:
+                self._lines.append(f'{indent_str}{c_line}')
+
+        if isinstance(term, IRBranch):
+            cond = self._value_c(term.cond)
+            true_label = term.true_label
+            false_label = term.false_label
+
+            true_path = labels.get(true_label)
+            false_path = labels.get(false_label)
+
+            true_is_jump = (true_path and isinstance(true_path.terminator, IRJump))
+            false_is_branch = (false_path and isinstance(false_path.terminator, IRBranch))
+            false_is_jump = (false_path and isinstance(false_path.terminator, IRJump))
+
+            self._lines.append(f'{indent_str}else if ({cond}) {{')
+            # Block both the false_label (next elif/else) and the merge target (end)
+            # from being inlined inside this elif body.
+            elif_jump_target = None
+            if true_is_jump:
+                elif_jump_target = true_path.terminator.label
+            blocked_targets = no_inline_targets | {false_label}
+            if elif_jump_target:
+                blocked_targets = blocked_targets | {elif_jump_target}
+            if merge_target:
+                blocked_targets = blocked_targets | {merge_target}
+            self._emit_cfg_region(true_label, labels, succ, pred,
+                                 order, back_edges, emitted, indent + 1,
+                                 loop_headers,
+                                 no_inline_targets=blocked_targets,
+                                 jump_targets=jump_targets)
+            self._lines.append(f'{indent_str}}}')
+
+            if false_label not in emitted:
+                if false_is_branch:
+                    # More elifs: continue chain (no extra 'else' - next handler adds it)
+                    self._emit_cfg_else_chain(false_label, labels, succ, pred,
+                                              order, back_edges, emitted, indent,
+                                              loop_headers, no_inline_targets, jump_targets,
+                                              merge_target=merge_target)
+                elif false_is_jump:
+                    self._lines.append(f'{indent_str}else {{')
+                    # Block merge_target from inlining inside the else body
+                    else_blocked = no_inline_targets
+                    if merge_target:
+                        else_blocked = else_blocked | {merge_target}
+                    self._emit_cfg_region(false_label, labels, succ, pred,
+                                         order, back_edges, emitted, indent + 1,
+                                         loop_headers, else_blocked, jump_targets)
+                    self._lines.append(f'{indent_str}}}')
+            return
+
+        if isinstance(term, IRJump):
+            target = term.label
+            is_back_edge = (label, target) in back_edges or target in loop_headers
+            if not is_back_edge and target not in no_inline_targets and target not in emitted:
+                self._lines.append(f'{indent_str}else {{')
+                # Block merge_target from inlining inside the else body
+                else_blocked = no_inline_targets
+                if merge_target:
+                    else_blocked = else_blocked | {merge_target}
+                self._emit_cfg_region(target, labels, succ, pred,
+                                     order, back_edges, emitted, indent + 1,
+                                     loop_headers, else_blocked, jump_targets)
+                self._lines.append(f'{indent_str}}}')
+            return
+
+        if isinstance(term, IRReturn):
+            self._lines.append(f'{indent_str}else {{')
+            self._lines.append(f'{indent_str}  {self._instr_c(term)}')
+            self._lines.append(f'{indent_str}}}')
+            return
+
+    def _reaches(self, start, target, labels, succ, back_edges, visited):
+        """Check if start label can reach target via successors."""
+        if start == target:
+            return True
+        if start in visited or start not in labels:
+            return False
+        visited.add(start)
+        for tgt in succ.get(start, []):
+            if (start, tgt) not in back_edges:
+                if self._reaches(tgt, target, labels, succ, back_edges, visited):
+                    return True
+        return False
 
     def _emit_setup(self, module: IRModule) -> None:
         self._section('SETUP')
         self._lines.append('void setup(void) {')
         hal = self._hal
-        self._lines.append(f'  {hal.serial_begin(self._baud)}' if hal else f'  Serial.begin({self._baud}UL);')
+        # Check if Serial.begin is already emitted by user setup blocks
+        user_has_serial_begin = any(
+            'Serial.begin' in code or 'serial_begin' in code
+            for code in module.setup_blocks
+        )
+        # Also check _iotift_setup function for Serial.begin
+        if not user_has_serial_begin:
+            for fn in module.functions:
+                if fn.name == '_iotift_setup':
+                    for bb in fn.blocks:
+                        for instr in bb.instructions:
+                            if isinstance(instr, IRCallIndirect):
+                                if 'Serial.begin' in instr.func_expr:
+                                    user_has_serial_begin = True
+                                    break
+        if not user_has_serial_begin:
+            self._lines.append(f'  {hal.serial_begin(self._baud)}' if hal else f'  Serial.begin({self._baud}UL);')
 
         # Pin modes
         for name, number in self._pins.items():
             if name in self._pwm_pins:
                 continue
-            dir_str = (
-                'INPUT_PULLUP' if name in self._on_pins
-                else _PIN_DIRECTION.get('output', 'OUTPUT')
-            )
+            # Determine direction from pin declaration (stored in module)
+            pin_dir = module.pin_directions.get(name, 'output')
+            if pin_dir in _PIN_DIRECTION:
+                dir_str = _PIN_DIRECTION[pin_dir]
+            elif name in self._on_pins:
+                dir_str = 'INPUT_PULLUP'
+            else:
+                dir_str = 'OUTPUT'
             if hal:
                 self._lines.append(f'  {hal.pin_mode(f"{name}_PIN", dir_str)}')
             else:
@@ -560,6 +1002,12 @@ class IRCodeGen:
             for ln in _dedent(code).split('\n'):
                 self._lines.append('  ' + ln)
 
+        # Run tick block once at startup (not in loop)
+        for fn in module.functions:
+            if fn.name == '_iotift_tick':
+                self._lines.append('  _iotift_tick();')
+                break
+
         self._lines.append('}')
         self._lines.append('')
 
@@ -575,11 +1023,11 @@ class IRCodeGen:
         for eh in module.on_threshold_handlers:
             self._loop_calls.append(f'{eh["name"]}();')
 
-        # Also check for tick/loop/user_loop functions
+        # Also check for loop/user_loop functions (tick runs in setup, not loop)
         handler_names = {h['name'] for h in
                          module.every_handlers + module.on_event_handlers + module.on_threshold_handlers}
         for fn in module.functions:
-            if fn.name in ('_iotift_tick', '_iotift_handle_loop', 'user_loop'):
+            if fn.name in ('_iotift_handle_loop', 'user_loop'):
                 if fn.name not in handler_names:
                     self._loop_calls.append(f'{fn.name}();')
 
@@ -705,6 +1153,8 @@ class IRCodeGen:
             if val.kind == 'void':
                 return ''
             return val.name
+        if isinstance(val, bool):
+            return 'true' if val else 'false'
         if isinstance(val, (int, float)):
             return str(val)
         if isinstance(val, str):
@@ -758,90 +1208,4 @@ class IRCodeGen:
     # ─────────────────────────────────────────
     #  STRUCTURED CONTROL FLOW
     # ─────────────────────────────────────────
-
-    def _is_simple_if_else(self, blocks: List[BasicBlock]) -> bool:
-        """Check if blocks form a simple if-then-else pattern."""
-        if len(blocks) < 3:
-            return False
-        # Entry block terminates with a branch
-        entry = blocks[0]
-        if not isinstance(entry.terminator, IRBranch):
-            return False
-        return True
-
-    def _emit_structured_if(self, blocks: List[BasicBlock]) -> None:
-        """Emit blocks as structured if/else instead of goto."""
-        entry = blocks[0]
-        branch = entry.terminator
-        if not isinstance(branch, IRBranch):
-            # Fallback: emit raw
-            for bb in blocks:
-                for instr in bb.instructions:
-                    c_line = self._instr_c(instr)
-                    if c_line:
-                        self._lines.append(f'  {c_line}')
-            return
-
-        # Emit non-terminator instructions from entry block
-        for instr in entry.instructions:
-            if isinstance(instr, IRBranch):
-                continue
-            if hasattr(instr, 'line') and instr.line > 0:
-                self._track_source(instr.line)
-            c_line = self._instr_c(instr)
-            if c_line:
-                self._lines.append(f'  {c_line}')
-                self._record_mapping(len(self._lines) - 1)
-
-        cond = self._value_c(branch.cond)
-        true_label = branch.true_label
-        false_label = branch.false_label
-
-        # Find the true/end blocks
-        true_block = None
-        end_block = None
-        for bb in blocks:
-            if bb.label == true_label:
-                true_block = bb
-            if bb.label == false_label:
-                end_block = bb
-
-        self._lines.append(f'  if ({cond}) {{')
-
-        # Emit true block
-        if true_block:
-            for instr in true_block.instructions:
-                if isinstance(instr, (IRBranch, IRJump)):
-                    continue
-                if hasattr(instr, 'line') and instr.line > 0:
-                    self._track_source(instr.line)
-                c_line = self._instr_c(instr)
-                if c_line:
-                    self._lines.append(f'    {c_line}')
-                    self._record_mapping(len(self._lines) - 1)
-
-        self._lines.append(f'  }}')
-
-        # Emit remaining blocks after the if (end block, etc.)
-        emitted_labels = {entry.label, true_label}
-        for bb in blocks:
-            if bb.label in emitted_labels:
-                continue
-            emitted_labels.add(bb.label)
-            if bb.label != entry.label and bb.label:
-                pass  # skip label comments for structured
-            for instr in bb.instructions:
-                if isinstance(instr, (IRJump, IRReturn)) and isinstance(instr, IRReturn):
-                    if hasattr(instr, 'line') and instr.line > 0:
-                        self._track_source(instr.line)
-                    c_line = self._instr_c(instr)
-                    if c_line:
-                        self._lines.append(f'  {c_line}')
-                        self._record_mapping(len(self._lines) - 1)
-                elif not isinstance(instr, (IRJump,)):
-                    if hasattr(instr, 'line') and instr.line > 0:
-                        self._track_source(instr.line)
-                    c_line = self._instr_c(instr)
-                    if c_line:
-                        self._lines.append(f'  {c_line}')
-                        self._record_mapping(len(self._lines) - 1)
+    # (Replaced by topological block ordering in _emit_function)

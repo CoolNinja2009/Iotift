@@ -1,0 +1,96 @@
+@device esp32
+
+// Stress test: structs, arrays, enums, for/while loops
+pin LED = output 13;
+
+struct Sensor {
+    int id;
+    float value;
+    float threshold;
+    bool active;
+}
+
+enum SensorState {
+    NORMAL,
+    WARNING,
+    CRITICAL
+}
+
+int sensor_count = 5;
+float readings[10];
+
+fn init_sensors() {
+    int i = 0;
+    while (i < sensor_count) {
+        readings[i] = 0.0;
+        i = i + 1;
+    }
+}
+
+fn read_all_sensors() -> float {
+    float total = 0.0;
+    int i = 0;
+    while (i < sensor_count) {
+        readings[i] = readings[i] + (sin(millis() * 0.001 + (i as float)) * 0.1);
+        total = total + readings[i];
+        i = i + 1;
+    }
+    return total / (sensor_count as float);
+}
+
+fn check_thresholds(float avg) -> int {
+    if (avg > 10.0) {
+        return CRITICAL;
+    } else if (avg > 5.0) {
+        return WARNING;
+    }
+    return NORMAL;
+}
+
+fn format_sensor(int idx) {
+    if (idx < sensor_count) {
+        println("  Sensor {idx}: {readings[idx]}");
+    }
+}
+
+init_sensors();
+
+int crit_blink_on = 0;
+
+every 500 {
+    float avg = read_all_sensors();
+    int state = check_thresholds(avg);
+
+    if (state == NORMAL) {
+        LED.low();
+        crit_blink_on = 0;
+    } else if (state == WARNING) {
+        LED.high();
+    } else if (state == CRITICAL) {
+        crit_blink_on = 1;
+    }
+}
+
+every 100 as crit_blink {
+    if (crit_blink_on == 1) {
+        LED.toggle();
+    }
+}
+
+every 10000 {
+    println("=== Sensor Report ===");
+    float avg = read_all_sensors();
+    println("Average: {avg}");
+    int i = 0;
+    while (i < sensor_count) {
+        format_sensor(i);
+        i = i + 1;
+    }
+}
+
+// Init messages
+println("Init sensor 0");
+println("Init sensor 1");
+println("Init sensor 2");
+println("Init sensor 3");
+println("Init sensor 4");

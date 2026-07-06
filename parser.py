@@ -88,11 +88,14 @@ class Parser:
         return False
 
     def _consume_type(self) -> str:
-        """Consume a type token (KEYWORD or TYPE_KW) and return the type name."""
+        """Consume a type token (KEYWORD, TYPE_KW, or IDENT) and return the type name."""
         tok = self._peek()
         if tok.type == TT.TYPE_KW:
             return self._advance().value
         if tok.type == TT.KEYWORD and tok.value in ('int', 'float', 'bool', 'str', 'void'):
+            return self._advance().value
+        # User-defined type names (struct, enum, type alias)
+        if tok.type == TT.IDENT:
             return self._advance().value
         # Unexpected — let caller handle
         return self._expect(TT.KEYWORD).value
@@ -166,6 +169,9 @@ class Parser:
         if (tok.type == TT.TYPE_KW and tok.value == 'void') or (tok.type == TT.KEYWORD and tok.value == 'void'):
             return self._parse_void_loop()
         if self._is_type_token():
+            return self._parse_var_decl()
+        # User-defined type var decl: `State current = IDLE;` (IDENT IDENT pattern)
+        if tok.type == TT.IDENT and self._peek(1).type == TT.IDENT:
             return self._parse_var_decl()
         if tok.type == TT.KEYWORD and tok.value in ('let', 'var'):
             return self._parse_let_var_decl()
@@ -735,6 +741,7 @@ class Parser:
                     stmts.append(s)
             except ParseError as e:
                 self._error(str(e))
+                self._sync()  # advance past the bad token to avoid infinite loop
         self._expect(TT.RBRACE)
         return stmts
 
@@ -766,6 +773,8 @@ class Parser:
                 return ContinueStmt(line=tok.line)
             if tok.value == 'stop':
                 return self._parse_stop()
+            if tok.value == 'start':
+                return self._parse_start()
             if tok.value == 'print':
                 return self._parse_print()
             if tok.value == 'println':
@@ -774,6 +783,8 @@ class Parser:
                 return self._parse_defer()
             if tok.value == 'after':
                 return self._parse_after_block()
+            if tok.value == 'every':
+                return self._parse_every()
             if tok.value == 'extern':
                 return self._parse_extern_fn()
             if tok.value == 'enum':
@@ -784,6 +795,9 @@ class Parser:
                 return self._parse_var_decl()
 
         if tok.type == TT.TYPE_KW:
+            return self._parse_var_decl()
+        # User-defined type var decl: `State current = IDLE;`
+        if tok.type == TT.IDENT and self._peek(1).type == TT.IDENT:
             return self._parse_var_decl()
         if tok.type == TT.C_BLOCK:
             return self._parse_c_block()
@@ -884,6 +898,13 @@ class Parser:
         label = self._expect(TT.IDENT).value
         self._expect_semi()
         return StopStmt(line=line, label=label)
+
+    def _parse_start(self) -> StartStmt:
+        line = self._peek().line
+        self._expect(TT.KEYWORD, 'start')
+        label = self._expect(TT.IDENT).value
+        self._expect_semi()
+        return StartStmt(line=line, label=label)
 
     def _parse_print(self, newline: bool = True) -> PrintStmt:
         line = self._peek().line
@@ -1113,6 +1134,10 @@ class Parser:
 
             # fn-call
             if self._check(TT.LPAREN):
+                # Math/stdlib functions → MathExpr
+                if name in _MATH_FUNCTIONS:
+                    args = self._parse_arg_list()
+                    return MathExpr(func=name, args=args, line=line)
                 args = self._parse_arg_list()
                 return FnCall(line=line, name=name, args=args)
 

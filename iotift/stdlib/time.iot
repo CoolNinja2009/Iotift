@@ -1,7 +1,7 @@
 // Iotift Standard Library: time
 // Time-related functions for ESP32/Arduino.
 
-extern fn millis() -> int;
-extern fn micros() -> int;
+extern fn millis() -> u32;
+extern fn micros() -> u32;
 extern fn delay(int ms);
 extern fn delay_us(int us);

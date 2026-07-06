@@ -1,0 +1,41 @@
+@device esp32
+
+pin LED_FAST = output 13;
+pin LED_SLOW = output 14;
+pin LED_PULSE = output 15;
+
+int fast_count = 0;
+int slow_count = 0;
+
+every 100 as blinker_fast {
+    LED_FAST.toggle();
+    fast_count = fast_count + 1;
+
+    if (fast_count >= 50) {
+        stop blinker_fast;
+        LED_FAST.low();
+        println("Fast blinker stopped after 50 toggles");
+    }
+}
+
+every 2000 as blinker_slow {
+    LED_SLOW.toggle();
+    slow_count = slow_count + 1;
+    println("Slow tick {slow_count}");
+}
+
+every 300 as pulser {
+    LED_PULSE.toggle();
+}
+
+after 10s {
+    stop pulser;
+    LED_PULSE.low();
+    println("Pulser stopped after 10 seconds");
+}
+
+after 15s {
+    println("=== Timer Demo Complete ===");
+    println("Fast toggles: {fast_count}");
+    println("Slow toggles: {slow_count}");
+}

@@ -73,7 +73,7 @@ KEYWORDS = frozenset({
     'extern', 'type',
     # Embedded
     'pin', 'on', 'every', 'schedule', 'tick',
-    'stop', 'as', 'after', 'isr', 'volatile',
+    'start', 'stop', 'as', 'after', 'isr', 'volatile',
     # Values
     'true', 'false',
     # Pin directions (contextual keywords — treated as IDENT then resolved)

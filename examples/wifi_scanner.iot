@@ -13,14 +13,16 @@
 
 // ── WiFi ─────────────────────────────────────────
 wifi scanner {
-    ssid: "DummySSID";
-    password: "DummyPassword";
-    retry: none;
+    ssid: "DummySSID",
+    password: "DummyPassword",
+    retry: none
 };
+
+pin LED = output 13;
 
 // ── Periodic scan ─────────────────────────────────
 every 10s as scan_timer {
-    if scanner.connected {
+    if (scanner.connected) {
         scanner.scan();
     }
 }
@@ -34,8 +36,8 @@ on scanner.connect {
 
 on scanner.scan_done {
     int count = scan_result_count();
-    println("Networks found: " + count);
-    for int i = 0; i < count; i += 1 {
+    println("Networks found: {count}");
+    for (int i = 0; i < count; i = i + 1) {
         print("  ");
         print(scan_result_ssid(i));
         print(" [");

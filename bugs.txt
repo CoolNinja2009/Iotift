@@ -1,0 +1,67 @@
+Based on my thorough investigation, here's my comprehensive assessment of the codegen situation.
+────────────────────────────────────────────────────────────────────────────────
+Codegen Assessment Report
+Architecture Overview
+The Iotift compiler has two codegen paths:
+┌──────────────────────────────────────────────┬───────────────────────┬─────────────────────────────────────────┐
+│ Path                                         │ Entry Point           │ Status                                  │
+├──────────────────────────────────────────────┼───────────────────────┼─────────────────────────────────────────┤
+│ Direct Codegen (codegen.py)                  │ --direct-codegen flag │ ✅ Gold standard — correct, idiomatic C │
+│ IR Pipeline (ir_lowering.py → ir_codegen.py) │ DEFAULT               │ ⚠️ Significant bugs                     │
+└──────────────────────────────────────────────┴───────────────────────┴─────────────────────────────────────────┘
+The IR pipeline is the default compilation path but was written as a first draft with many stubbed-out sections. The  TODO.md  already documents 30+ specific bugs under Milestone 9.
+────────────────────────────────────────────────────────────────────────────────
+Critical Bugs Found (Would Prevent ESP32 from Running Correctly)
+Bug 9.10 — Type propagation broken: ALL temp variables default to  int 
+-  ir_lowering.py:1057 :  _vv(node.name, 'int')  — identifiers always typed  int 
+-  ir_lowering.py:1192 : binary ops default to  'int'  unless left operand is  float 
+-  ir_lowering.py:1137 :  self.builder.new_temp('call', 'int')  — calls always  int 
+- Impact:  float x = sin(3.14) * 2.0  — all intermediate temps are  int  → silent truncation of floating-point math. Temperature sensors, signal processing, PID controllers all silently produce garbage.
+Bug 9.8 —  if  lowering: body code emitted BEFORE condition check
+-  ir_lowering.py:830-869 : The branch instruction is returned without the body, but body code is emitted directly inside  _lower_if  via  self.builder.emit() . The caller emits the branch AFTER the bodies.
+- Impact: Handler functions execute body code unconditionally, condition check comes after. Pins toggle, motors spin, heaters turn on regardless of the  if  condition.
+Bug 9.3 — WiFi events lowered as pin ISRs with  attachInterrupt  on undefined pins
+-  ir_lowering.py:341-437 : Every  on <target>.<event>  uses  attachInterrupt  + ISR. WiFi events (e.g.,  on scanner.scan_done ) create  attachInterrupt(scanner_PIN, ...)  — but  scanner_PIN  doesn't exist as a GPIO pin.
+- Impact: Linker error — undefined symbol  scanner_PIN . WiFi event handlers won't compile.
+Bug 9.7 — WiFi declarations silently dropped in IR pipeline
+-  ir_lowering.py:134-250 :  _lower_top_level  has no handler for  WifiDecl . The AST nodes are completely skipped.
+- Impact: WiFi  begin() , state machines, event loops are entirely missing from generated C. WiFi programs produce broken, non-functional code.
+Bug 9.13 —  break  placeholder  __break__  leaks into C output
+-  ir_lowering.py:720 :  return [IRJump('__break__')]  — the  _loop_stack  is empty (not pushed in the current code), so all  break  statements emit  goto __break__; .
+- Impact: C compilation error — label  __break__  never defined. Any file with  break  in a loop won't compile.
+Bug 9.4 — Array declarations lose their size
+-  ir_lowering.py:146-151 :  IRGlobal(ctype=to_ctype(node.vtype))  only stores element type, not array type  element[size] .
+- Impact:  float readings[10];  becomes  float readings;  — a scalar, not an array. Array accesses corrupt memory.
+Bug 9.16 — Struct field access emits member access on string literal
+- When a struct variable name is used, the identifier lowering can resolve it as a string literal, producing  "cs".value  in C.
+- Impact: C compilation error — you can't access  .  on a string literal. Any struct usage generates invalid C.
+Bug 9.1 — Pin method calls emit invalid C
+-  LED.toggle() ,  TEMP.read()  — when the pin object name is lowered, it can produce  LED.toggle()  as raw C instead of  digitalWrite(LED_PIN, !digitalRead(LED_PIN)) .
+- Impact: Linker error — pins are  uint8_t  constants, not objects with methods.
+Bug 9.6 — Duplicate function definitions (colliding names)
+- Two  on TEMP > X  and  on TEMP < Y  on the same pin create identically-named functions.
+- Impact: C compilation error — redefinition of  _iotift_threshold_TEMP .
+Bug 9.19 —  after  block: fire-body code unreachable
+- The  goto  ordering puts the fire block after a  goto , making it unreachable.
+- Impact:  after 5s { LED.high(); }  — the LED never turns on.
+────────────────────────────────────────────────────────────────────────────────
+Summary of Test Results
+┌─────────────────────┬─────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+│ Test Suite          │ Path                │ Result                                                                       │
+├─────────────────────┼─────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+│ test_codegen.py     │ Direct codegen only │ ✅ Passes (13 tests)                                                         │
+│ test_ir.py          │ IR pipeline         │ ✅ Passes (47 tests) — but tests shallow constructs                          │
+│ test_backend_c.py   │ Both paths          │ ✅ Passes (72 tests) — but checks simple patterns that compile syntactically │
+│ Real-world examples │ IR pipeline         │ ⚠️ Compiles but runtime behavior is broken                                   │
+└─────────────────────┴─────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+The tests pass because they verify surface-level patterns (presence of  #include , function names, basic structure) but don't validate runtime correctness — float truncation, wrong function ordering, and unreachable blocks go undetected.
+────────────────────────────────────────────────────────────────────────────────
+Next Steps
+The Milestone 9 bug bash in  TODO.md  already has the complete fix plan organized into phases:
+Phase A (control flow):  9.8 → 9.9 → 9.13 → 9.22 → 9.19 → 9.20
+Phase B (expressions):   9.1 → 9.10 → 9.2 → 9.5
+Phase C (declarations):  9.4 → 9.7 → 9.3 → 9.11 → 9.6
+Phase D (quality):       9.14 → 9.16 → 9.21 → 9.23
+Phase E (prelude):       9.17 → 9.18 → 9.24 → 9.25 → 9.26
+Phase F (verify):        9.27 → 9.28 → 9.29 → 9.30
+Would you like me to start working through these fixes? Phase A (control flow) is the highest priority — control-flow bugs cascade into ~50% of all other issues.

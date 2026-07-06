@@ -30,6 +30,8 @@ class IROptimizer:
     def run_all(self) -> IRModule:
         """Run all optimization passes."""
         self.constant_folding()
+        self.copy_propagation()
+        self.dead_temp_elimination()
         self.dead_code_elimination()
         self.empty_handler_removal()
         self.redundant_store_elimination()
@@ -337,6 +339,129 @@ class IROptimizer:
                 names.add(instr.base.name)
             if instr.index.kind == 'var':
                 names.add(instr.index.name)
+        return names
+
+    # ─────────────────────────────────────────
+    #  PASS 2.5: COPY PROPAGATION
+    # ─────────────────────────────────────────
+
+    def copy_propagation(self) -> None:
+        """
+        Forward-substitute simple copies within each basic block.
+        t1 = x;  ... = t1 + y;  →  ... = x + y;
+        Then the dead copy can be removed by dead_temp_elimination.
+        """
+        for fn in self.module.functions:
+            for bb in fn.blocks:
+                self._cp_block(bb)
+
+    def _cp_block(self, bb: BasicBlock) -> None:
+        """Apply copy propagation within a single basic block."""
+        # Map: temp_name → IRValue to substitute
+        copies: Dict[str, IRValue] = {}
+        new_instrs = []
+        for instr in bb.instructions:
+            # Substitute uses of known copies
+            self._cp_replace_uses(instr, copies)
+
+            # Record new copy definitions
+            if isinstance(instr, IRCopy):
+                if instr.dest.kind == 'temp' and instr.src.kind in ('var', 'global', 'const', 'temp', 'param'):
+                    copies[instr.dest.name] = instr.src
+
+            new_instrs.append(instr)
+        bb.instructions = new_instrs
+
+    def _cp_replace_uses(self, instr, copies: Dict[str, IRValue]) -> None:
+        """Replace uses of copied temps with their source values."""
+        fields_to_check = ['src', 'left', 'right', 'operand', 'base', 'index', 'obj']
+        for fname in fields_to_check:
+            val = getattr(instr, fname, None)
+            if val and isinstance(val, IRValue) and val.kind == 'temp':
+                if val.name in copies:
+                    setattr(instr, fname, copies[val.name])
+        # Also check args list for IRCall/IRCallIndirect
+        if hasattr(instr, 'args'):
+            new_args = []
+            for arg in instr.args:
+                if arg.kind == 'temp' and arg.name in copies:
+                    new_args.append(copies[arg.name])
+                else:
+                    new_args.append(arg)
+            instr.args = new_args
+
+    # ─────────────────────────────────────────
+    #  PASS 2.8: DEAD TEMP ELIMINATION
+    # ─────────────────────────────────────────
+
+    def dead_temp_elimination(self) -> None:
+        """
+        Remove instructions whose destination temp is never used.
+        Collects all temp uses across the function, then removes unused defs.
+        """
+        for fn in self.module.functions:
+            self._dte_function(fn)
+
+    def _dte_function(self, fn: IRFunction) -> None:
+        """Eliminate dead temp definitions within a function."""
+        # Collect: which temps are defined, which are used
+        defined: Dict[str, int] = {}  # name → definition count
+        used: set = set()
+
+        for bb in fn.blocks:
+            for instr in bb.instructions:
+                if isinstance(instr, (IRBinary, IRUnary, IRCall, IRCallIndirect,
+                                      IRCast, IRArrayAccess, IRMemberAccess,
+                                      IRCopy, IRLoad)):
+                    if instr.dest and instr.dest.kind == 'temp':
+                        defined[instr.dest.name] = defined.get(instr.dest.name, 0) + 1
+                # Collect all temp uses
+                for used_name in self._temp_uses(instr):
+                    used.add(used_name)
+
+        # Temps defined but never used (after accounting for multiple defs)
+        dead = set()
+        for name, count in defined.items():
+            if name not in used:
+                dead.add(name)
+
+        if not dead:
+            return
+
+        # Remove instructions that define only dead temps
+        for bb in fn.blocks:
+            bb.instructions = [
+                instr for instr in bb.instructions
+                if not self._is_dead_def(instr, dead)
+            ]
+
+    def _is_dead_def(self, instr, dead: set) -> bool:
+        """Check if an instruction defines a dead temp and has no side effects."""
+        dest = getattr(instr, 'dest', None)
+        if not dest or dest.kind != 'temp':
+            return False
+        if dest.name not in dead:
+            return False
+        # Don't remove function calls (side effects) even if temp is unused
+        if isinstance(instr, (IRCall, IRCallIndirect)):
+            return False  # Keep the call for side effects even if result unused
+        if isinstance(instr, IRStore):
+            return False  # Stores have side effects
+        return True
+
+    def _temp_uses(self, instr) -> set:
+        """Return set of temp names used by an instruction."""
+        names: set = set()
+        fields = ['src', 'left', 'right', 'operand', 'base', 'index', 'obj',
+                  'cond', 'value']
+        for fname in fields:
+            val = getattr(instr, fname, None)
+            if val and isinstance(val, IRValue) and val.kind == 'temp':
+                names.add(val.name)
+        if hasattr(instr, 'args'):
+            for arg in instr.args:
+                if arg.kind == 'temp':
+                    names.add(arg.name)
         return names
 
     # ─────────────────────────────────────────

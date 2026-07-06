@@ -1,9 +1,5 @@
 // Iotift Standard Library: math
-// Math functions. The c header block ensures <math.h> is included.
-
-c header {
-    #include <math.h>
-}
+// Math functions. <math.h> is included by the codegen only when needed.
 
 extern fn sin(float x) -> float;
 extern fn cos(float x) -> float;

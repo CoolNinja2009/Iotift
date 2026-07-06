@@ -1,0 +1,42 @@
+@device esp32
+
+// WiFi Access Point mode
+wifi IotiftAP {
+    mode: ap,
+    ssid: "Iotift Sensor Hub",
+    password: "iotift123",
+    channel: 6,
+    max_clients: 4
+};
+
+pin LED = output 13;
+pin STATUS = output 14;
+
+int client_count = 0;
+
+on IotiftAP.client_join {
+    client_count = client_count + 1;
+    LED.high();
+    println("Client joined! Total: {client_count}");
+}
+
+on IotiftAP.client_leave {
+    client_count = client_count - 1;
+    if (client_count <= 0) {
+        LED.low();
+        client_count = 0;
+    }
+    println("Client left. Total: {client_count}");
+}
+
+every 1000 {
+    STATUS.toggle();
+}
+
+every 5000 {
+    println("AP running. Clients: {client_count}, IP: {IotiftAP.ip}");
+}
+
+after 60s {
+    println("AP uptime: 60 seconds, {client_count} clients served");
+}

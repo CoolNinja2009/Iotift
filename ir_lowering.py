@@ -62,6 +62,7 @@ class IRBuilder:
         self.module = module
         self.func = func
         self._current_line: int = 0  # Track current AST source line
+        self._loop_stack: List[Tuple[str, str]] = []  # (continue_label, break_label)
 
     def emit(self, instr) -> None:
         """Append an instruction to the current block."""
@@ -112,6 +113,10 @@ class IRLowering:
         # All declared vars (for stack promotion)
         self._declared_vars: Dict[str, IRGlobal] = {}
 
+        # WiFi tracking (Milestone 8)
+        self._wifi_decls: List[Any] = []  # list of WifiDecl nodes
+        self._wifi_names: set = set()
+
     # ─────────────────────────────────────────
     #  TOP-LEVEL ENTRY
     # ─────────────────────────────────────────
@@ -148,6 +153,7 @@ class IRLowering:
             self.module.add_global(IRGlobal(
                 name=node.name, ctype=ct,
                 is_static=True, is_const=not node.is_mutable,
+                array_size=node.size,
             ))
 
         elif isinstance(node, StructDecl):
@@ -199,6 +205,9 @@ class IRLowering:
                 'loop':   self.module.loop_blocks,
             }.get(node.scope, self.module.global_blocks)
             target.append(node.code)
+
+        elif isinstance(node, WifiDecl):
+            self._lower_wifi_decl(node)
 
         elif isinstance(node, OnEvent):
             self._lower_on_event(node)
@@ -255,6 +264,7 @@ class IRLowering:
     def _lower_pin_decl(self, node: PinDecl) -> None:
         self._pins[node.name] = node
         self.module.pins[node.name] = node.number
+        self.module.pin_directions[node.name] = node.direction
 
         if node.direction == 'pwm':
             ch = self.module.allocate_pwm_channel()
@@ -265,6 +275,82 @@ class IRLowering:
                 'resolution': node.pwm_resolution or 8,
             }
             self._pwm_pins[node.name] = self.module.pwm_pins[node.name]
+
+    def _lower_wifi_decl(self, node: WifiDecl) -> None:
+        """Record WiFi declaration and emit boilerplate global state blocks."""
+        self._wifi_decls.append(node)
+        self._wifi_names.add(node.name)
+        self.module.has_wifi = True
+
+        name = node.name
+        cfg = node.config
+        mode = node.mode
+
+        # Per-declaration state variables
+        self.module.add_global(IRGlobal(
+            name=f'_iotift_wifi_{name}_state', ctype='int', init=0,
+            is_static=True,
+        ))
+        self.module.add_global(IRGlobal(
+            name=f'_iotift_wifi_{name}_connected', ctype='bool', init=0,
+            is_static=True,
+        ))
+        self.module.add_global(IRGlobal(
+            name=f'_iotift_wifi_{name}_ip', ctype='const char*', init='""',
+            is_static=True,
+        ))
+        self.module.add_global(IRGlobal(
+            name=f'_iotift_wifi_{name}_rssi', ctype='int', init=0,
+            is_static=True,
+        ))
+        self.module.add_global(IRGlobal(
+            name=f'_iotift_wifi_{name}_channel', ctype='int', init=0,
+            is_static=True,
+        ))
+        self.module.add_global(IRGlobal(
+            name=f'_iotift_wifi_{name}_mac', ctype='const char*', init='""',
+            is_static=True,
+        ))
+        # Client count (AP mode only, but declare unconditionally for simplicity)
+        self.module.add_global(IRGlobal(
+            name=f'_iotift_wifi_{name}_client_count', ctype='int', init=0,
+            is_static=True,
+        ))
+
+        # Event pending flags for each event type
+        for ev in ['connect', 'disconnect', 'got_ip', 'scan_done',
+                    'client_join', 'client_leave']:
+            self.module.add_global(IRGlobal(
+                name=f'_iotift_wifi_{name}_event_{ev}', ctype='bool', init=0,
+                is_static=True,
+            ))
+
+        # Retry state
+        self.module.add_global(IRGlobal(
+            name=f'_iotift_wifi_{name}_retry_count', ctype='int', init=0,
+            is_static=True,
+        ))
+        self.module.add_global(IRGlobal(
+            name=f'_iotift_wifi_{name}_last_retry_ms', ctype='unsigned long', init=0,
+            is_static=True,
+        ))
+
+        # Add WiFi init to setup_blocks
+        ssid = cfg.get('ssid', '')
+        password = cfg.get('password', '')
+        if mode == 'sta':
+            self.module.setup_blocks.append(
+                f'WiFi.mode(WIFI_STA);\n'
+                f'  WiFi.begin("{ssid}", "{password}");'
+            )
+        elif mode == 'ap':
+            self.module.setup_blocks.append(
+                f'WiFi.mode(WIFI_AP);\n'
+                f'  WiFi.softAP("{ssid}"{", " + chr(34) + password + chr(34) if password else ""});'
+            )
+        self.module.setup_blocks.append(
+            f'/* WiFi "{name}" ({mode}) initialized */'
+        )
 
     # ─────────────────────────────────────────
     #  GLOBAL VARIABLE
@@ -340,6 +426,11 @@ class IRLowering:
 
     def _lower_on_event(self, node: OnEvent) -> None:
         if not node.body:
+            return
+
+        # WiFi events: skip pin ISR creation (WiFi events dispatch from event loop)
+        if node.target in self._wifi_names or hasattr(node, 'target') and node.target in self._wifi_names:
+            self._lower_wifi_event(node)
             return
 
         self._on_pins.add(node.pin)
@@ -435,11 +526,56 @@ class IRLowering:
             'has_body': True,
         })
 
+    def _lower_wifi_event(self, node: OnEvent) -> None:
+        """Lower a WiFi on-event handler (no ISR, dispatched from loop)."""
+        if not node.body:
+            return
+
+        fn_name = f'_iotift_wifi_{node.target}_on_{node.event}'
+        fn = IRFunction(
+            name=fn_name, return_type='void',
+            entry_block='entry', is_static=True,
+        )
+        fn.new_block('entry')
+        self.module.add_function(fn)
+        self.builder = IRBuilder(self.module, fn)
+
+        # Guard: only execute body if the event flag is set
+        flag_var = f'_iotift_wifi_{node.target}_event_{node.event}'
+        flag_val = self.builder.new_temp('flag', 'bool')
+        self.builder.emit(IRBinary('!=', _gv(flag_var, 'bool'), _cv(0, 'int'), dest=flag_val))
+        body_label = self.builder.new_label('body')
+        end_label = self.builder.new_label('end')
+        self.builder.emit(IRBranch(flag_val, body_label, end_label))
+
+        # Body: clear flag, then execute user body
+        self.builder.new_block(body_label)
+        self.builder.emit(IRCopy(_cv(0, 'int'), _gv(flag_var, 'bool')))
+        for stmt in node.body:
+            for instr in self._lower_stmt(stmt):
+                self.builder.emit(instr)
+        self.builder.emit(IRJump(end_label))
+
+        self.builder.new_block(end_label)
+        self.builder.emit(IRReturn())
+
+        # Register as handler for loop dispatch
+        self.module.on_event_handlers.append({
+            'name': fn_name,
+            'pin': '',  # No pin for WiFi events
+            'event': node.event,
+            'has_body': True,
+            'is_wifi': True,
+            'wifi_name': node.target,
+        })
+
     def _lower_on_threshold(self, node: OnThreshold) -> None:
         if not node.body:
             return
 
-        fn_name = f'_iotift_threshold_{node.pin}'
+        # Include operator + value to make name unique for multiple thresholds on same pin
+        val_str = str(hash(str(node.value))) if node.value else '0'
+        fn_name = f'_iotift_threshold_{node.pin}_{node.op}_{val_str}'
         fn = IRFunction(
             name=fn_name, return_type='void',
             entry_block='entry', is_static=True,
@@ -453,11 +589,22 @@ class IRLowering:
         for instr in val_instrs:
             self.builder.emit(instr)
 
+        # Read the pin value first — use analogRead for analog pins, digitalRead for digital pins
+        pin_decl = self._pins.get(node.pin)
+        if pin_decl and pin_decl.direction == 'analog':
+            pin_val = self.builder.new_temp(f'{node.pin}_val', 'int')
+            self.builder.emit(IRCall('analogRead',
+                [_cv(f'{node.pin}_PIN', 'uint8_t')], dest=pin_val))
+        else:
+            pin_val = self.builder.new_temp(f'{node.pin}_val', 'int')
+            self.builder.emit(IRCall('digitalRead',
+                [_cv(f'{node.pin}_PIN', 'uint8_t')], dest=pin_val))
+
         # Condition
         cond = self.builder.new_temp('cond', 'bool')
         self.builder.emit(IRBinary(
             op=node.op,
-            left=_vv(node.pin, 'int'),
+            left=pin_val,
             right=val,
             dest=cond,
         ))
@@ -650,9 +797,24 @@ class IRLowering:
         self.module.add_function(fn)
         self.builder = IRBuilder(self.module, fn)
 
+        # Create proper infinite loop structure so break/continue have valid targets
+        body_label = self.module.new_label('loop_body')
+        end_label = self.module.new_label('loop_end')
+        self.builder._loop_stack.append((body_label, end_label))
+
+        # Jump to body (entry point for infinite loop)
+        self.builder.emit(IRJump(body_label))
+        self.builder.new_block(body_label)
+
         for stmt in node.body:
             for instr in self._lower_stmt(stmt):
                 self.builder.emit(instr)
+
+        # Back to body for infinite loop
+        self.builder.emit(IRJump(body_label))
+        self.builder.new_block(end_label)
+        self.builder._loop_stack.pop()
+
         if not fn.blocks[-1].is_terminated:
             self.builder.emit(IRReturn())
 
@@ -717,9 +879,13 @@ class IRLowering:
         if isinstance(node, ReturnStmt):
             return self._lower_return(node)
         if isinstance(node, BreakStmt):
-            return [IRJump('__break__')]   # placeholder, resolved by loop lowerer
+            if self.builder._loop_stack:
+                return [IRJump(self.builder._loop_stack[-1][1])]  # break → loop end
+            return [IRJump('__break__')]  # fallback
         if isinstance(node, ContinueStmt):
-            return [IRJump('__continue__')]  # placeholder
+            if self.builder._loop_stack:
+                return [IRJump(self.builder._loop_stack[-1][0])]  # continue → loop cond
+            return [IRJump('__continue__')]  # fallback
         if isinstance(node, PrintStmt):
             return self._lower_print(node)
         if isinstance(node, FnCall):
@@ -734,6 +900,9 @@ class IRLowering:
             return self._lower_pwm_setup(node)
         if isinstance(node, StopStmt):
             return self._lower_stop(node)
+        # StartStmt not yet in AST — handled via direct string check
+        if hasattr(node, '__class__') and node.__class__.__name__ == 'StartStmt':
+            return self._lower_start(node)
         if isinstance(node, ExprStmt):
             val, instrs = self._lower_expr(node.expr, None)
             return instrs
@@ -772,11 +941,20 @@ class IRLowering:
             else:
                 instrs.append(IRCopy(val, _vv(node.target, val.ctype)))
         elif isinstance(node.target, ArrayAccess):
-            instrs.append(IRStore(val, _vv(node.target.name, val.ctype)))
+            # Emit array[index] = val by encoding index in the dest name
+            idx, idx_instrs = self._lower_expr(node.target.index)
+            instrs.extend(idx_instrs)
+            dest_name = f'{node.target.name}[{idx.name}]'
+            instrs.append(IRStore(val, _vv(dest_name, val.ctype)))
         elif isinstance(node.target, MemberAccess):
-            obj, obj_instrs = self._lower_expr(node.target.obj)
-            instrs.extend(obj_instrs)
-            instrs.append(IRCopy(val, _vv(f'{obj.name}.{node.target.member}', val.ctype)))
+            # Handle raw-string obj (parser stores obj as str for simple cases)
+            if isinstance(node.target.obj, str):
+                obj_name = node.target.obj
+            else:
+                obj, obj_instrs = self._lower_expr(node.target.obj)
+                instrs.extend(obj_instrs)
+                obj_name = obj.name
+            instrs.append(IRCopy(val, _vv(f'{obj_name}.{node.target.member}', val.ctype)))
         else:
             instrs.append(IRCopy(val, _vv(str(node.target), val.ctype)))
 
@@ -828,52 +1006,134 @@ class IRLowering:
     # ─────────────────────────────────────────
 
     def _lower_if(self, node: IfStmt) -> List:
+        """Lower if/elif/else by emitting condition+branch DIRECTLY into the
+        current block BEFORE creating new blocks. Returns empty list because
+        everything is emitted inside this method at the correct time.
+
+        Block structure produced (goto-based, blocks in creation order):
+          [calling block]  condition check + IRBranch  (emitted first)
+          [then block]     then body + IRJump endif
+          [elif_test_N]    elif condition + IRBranch
+          [elif_body_N]    elif body + IRJump endif
+          [else_body]      else body + IRJump endif
+          [endif]          continuation after if statement
+        """
         cond, cond_instrs = self._lower_expr(node.condition)
-        instrs = []
-        instrs.extend(cond_instrs)
 
-        then_label = self.builder.new_label('then')
-        else_label = self.builder.new_label('else') if node.else_body or node.elif_clauses else self.builder.new_label('endif')
+        # ── EMIT condition check into the CURRENT block IMMEDIATELY ──
+        for instr in cond_instrs:
+            self.builder.emit(instr)
+
         end_label = self.builder.new_label('endif')
+        has_else_chain = bool(node.elif_clauses or node.else_body)
 
-        instrs.append(IRBranch(cond, then_label, else_label))
+        if not has_else_chain:
+            # Simple if-then (no else/elif)
+            then_label = self.builder.new_label('then')
+            self.builder.emit(IRBranch(cond, then_label, end_label))
 
-        # Then block
-        self.builder.new_block(then_label)
-        for s in node.then_body:
-            stmt_lines = self._lower_stmt(s)
-            for instr in stmt_lines:
-                self.builder.emit(instr)
-        self.builder.emit(IRJump(end_label))
+            self.builder.new_block(then_label)
+            for s in node.then_body:
+                for inst in self._lower_stmt(s):
+                    self.builder.emit(inst)
+            self.builder.emit(IRJump(end_label))
+        else:
+            # if/elif/else chain — create proper cascade
+            then_label = self.builder.new_label('then')
+            first_else_label = self.builder.new_label('elif_chain')
+            self.builder.emit(IRBranch(cond, then_label, first_else_label))
 
-        # elif/else
-        if node.elif_clauses or node.else_body:
-            self.builder.new_block(else_label)
-            for ec, eb in node.elif_clauses:
-                ec_val, ec_instrs = self._lower_expr(ec)
-                for instr in ec_instrs:
-                    self.builder.emit(instr)
-                next_label = self.builder.new_label('elif')
-                self.builder.emit(IRBranch(
-                    ec_val, then_label.replace('then', f'elif_{id(ec)}'), next_label,
-                ))
-                # Actually need proper elif chaining — simplify with merge
-            # For simplicity, emit raw style
+            # Then block
+            self.builder.new_block(then_label)
+            for s in node.then_body:
+                for inst in self._lower_stmt(s):
+                    self.builder.emit(inst)
             self.builder.emit(IRJump(end_label))
 
-        # Use simple all-in-one approach for elif (since we lower from AST,
-        # the IR retains the structure but we need to handle elif properly)
-        # Rather than complex IR, let's use a straightforward lowering
+            # Elif chain
+            current_label = first_else_label
+            self.builder.new_block(current_label)
 
+            num_elifs = len(node.elif_clauses)
+            for i, (ec, eb) in enumerate(node.elif_clauses):
+                ec_val, ec_instrs = self._lower_expr(ec)
+                for inst in ec_instrs:
+                    self.builder.emit(inst)
+
+                is_last = (i + 1 == num_elifs)
+                has_else = bool(node.else_body)
+
+                if is_last and has_else:
+                    # Last elif with else: false_label → else_body
+                    else_body_label = self.builder.new_label('else_body')
+                    body_label = self.builder.new_label('elif_body')
+                    self.builder.emit(IRBranch(ec_val, body_label, else_body_label))
+
+                    self.builder.new_block(body_label)
+                    for s in eb:
+                        for inst in self._lower_stmt(s):
+                            self.builder.emit(inst)
+                    self.builder.emit(IRJump(end_label))
+
+                    # Else body block
+                    self.builder.new_block(else_body_label)
+                    for s in node.else_body:
+                        for inst in self._lower_stmt(s):
+                            self.builder.emit(inst)
+                    self.builder.emit(IRJump(end_label))
+                elif is_last:
+                    # Last elif, no else — branch to body or end
+                    body_label = self.builder.new_label('elif_body')
+                    self.builder.emit(IRBranch(ec_val, body_label, end_label))
+
+                    self.builder.new_block(body_label)
+                    for s in eb:
+                        for inst in self._lower_stmt(s):
+                            self.builder.emit(inst)
+                    self.builder.emit(IRJump(end_label))
+                else:
+                    # Not last elif — continue chain
+                    next_test_label = self.builder.new_label('elif_chain')
+                    body_label = self.builder.new_label('elif_body')
+                    self.builder.emit(IRBranch(ec_val, body_label, next_test_label))
+
+                    # Elif body block
+                    self.builder.new_block(body_label)
+                    for s in eb:
+                        for inst in self._lower_stmt(s):
+                            self.builder.emit(inst)
+                    self.builder.emit(IRJump(end_label))
+
+                    # Continue chain
+                    current_label = next_test_label
+                    self.builder.new_block(current_label)
+
+            # If no elifs but has else: simple if/else
+            if num_elifs == 0 and node.else_body:
+                # The current block is first_else_label (the path taken when
+                # condition is false). Jump to else_body from here.
+                else_body_label = self.builder.new_label('else_body')
+                self.builder.emit(IRJump(else_body_label))
+                self.builder.new_block(else_body_label)
+                for s in node.else_body:
+                    for inst in self._lower_stmt(s):
+                        self.builder.emit(inst)
+                self.builder.emit(IRJump(end_label))
+
+        # End block (continuation after the if)
         self.builder.new_block(end_label)
-        return instrs  # Return the branch instruction (rest emitted directly)
+        return []  # All instructions emitted directly — nothing to return
 
     def _lower_while(self, node: WhileStmt) -> List:
         cond_label = self.builder.new_label('while_cond')
         body_label = self.builder.new_label('while_body')
         end_label = self.builder.new_label('while_end')
 
-        instrs = [IRJump(cond_label)]
+        # Push loop labels for break/continue
+        self.builder._loop_stack.append((cond_label, end_label))
+
+        # Emit jump to condition BEFORE creating new blocks
+        self.builder.emit(IRJump(cond_label))
 
         # Condition check
         self.builder.new_block(cond_label)
@@ -890,25 +1150,30 @@ class IRLowering:
                 self.builder.emit(instr)
         self.builder.emit(IRJump(cond_label))
 
-        # End
+        # End (NOT terminated — continuation after loop)
         self.builder.new_block(end_label)
 
-        return instrs
+        # Pop loop labels
+        self.builder._loop_stack.pop()
+
+        return []  # All emitted directly
 
     def _lower_for(self, node: ForStmt) -> List:
-        instrs = []
-
-        # Init
+        # Init — emitted BEFORE creating new blocks
         if node.init:
             init_instrs = self._lower_stmt(node.init)
-            instrs.extend(init_instrs)
+            for instr in init_instrs:
+                self.builder.emit(instr)
 
         cond_label = self.builder.new_label('for_cond')
         body_label = self.builder.new_label('for_body')
         step_label = self.builder.new_label('for_step')
         end_label = self.builder.new_label('for_end')
 
-        instrs.append(IRJump(cond_label))
+        # Push loop labels for break/continue
+        self.builder._loop_stack.append((step_label, end_label))
+
+        self.builder.emit(IRJump(cond_label))
 
         # Condition check
         self.builder.new_block(cond_label)
@@ -939,7 +1204,10 @@ class IRLowering:
         # End
         self.builder.new_block(end_label)
 
-        return instrs
+        # Pop loop labels
+        self.builder._loop_stack.pop()
+
+        return []  # All emitted directly
 
     def _lower_return(self, node: ReturnStmt) -> List:
         if node.value is not None:
@@ -986,18 +1254,32 @@ class IRLowering:
         if isinstance(node.value, Literal) and node.value.vtype == 'str':
             s = node.value.value
             import re
-            parts = re.split(r'\{(\w+)\}', s)
+            parts = re.split(r'\{([^{}]+)\}', s)
             if len(parts) > 1:
-                # Interpolated
+                # Interpolated string: emit Serial.print for each segment
                 for i, part in enumerate(parts):
                     if not part:
                         continue
                     if i % 2 == 0:
+                        # Static string segment
                         f = func if i == len(parts) - 1 else 'Serial.print'
                         instrs.append(IRCall(f, [_cv(part, 'str')], dest=None))
                     else:
+                        # Interpolated expression
                         f = func if i == len(parts) - 1 else 'Serial.print'
-                        instrs.append(IRCall(f, [_vv(part, 'int')], dest=None))
+                        # Handle member access: obj.field
+                        if '.' in part or '[' in part:
+                            # Emit as raw expression via IRCallIndirect
+                            instrs.append(IRCallIndirect(
+                                func_expr=f'{f}({part})', args=[], dest=None,
+                            ))
+                        elif re.match(r'^[\w_]+$', part):
+                            # Simple variable name
+                            instrs.append(IRCall(f, [_vv(part, 'int')], dest=None))
+                        else:
+                            # Complex expression — emit as literal for now
+                            # (parser should pre-parse these in the future)
+                            instrs.append(IRCall(f, [_cv(f'({part})', 'str')], dest=None))
                 return instrs
 
         instrs.append(IRCall(func, [val], dest=None))
@@ -1034,9 +1316,32 @@ class IRLowering:
             return [IRCopy(_cv(0, 'int'), _gv(active_var, 'int'))]
         return []
 
+    def _lower_start(self, node: StartStmt) -> List:
+        """start timer_label; → set active flag to 1."""
+        if node.label in self._every_labels:
+            active_var = self._every_labels[node.label]
+            return [IRCopy(_cv(1, 'int'), _gv(active_var, 'int'))]
+        return []
+
     # ─────────────────────────────────────────
     #  EXPRESSION LOWERING
     # ─────────────────────────────────────────
+
+    def _get_ctype(self, node) -> str:
+        """Determine the C type for an AST expression node.
+
+        Uses semantic analysis annotations (_resolved_type) when available,
+        falls back to vtype string or 'int'.
+        """
+        # Check for semantic type annotation (set by SemanticAnalyzer Pass 3)
+        resolved = getattr(node, '_resolved_type', None)
+        if resolved is not None and hasattr(resolved, 'c_type'):
+            return resolved.c_type()
+        # Fallback: check vtype attribute
+        if hasattr(node, 'vtype') and node.vtype:
+            return to_ctype(node.vtype)
+        # Default for comparisons and untyped nodes
+        return 'int'
 
     def _lower_expr(self, node: Any, dest: Optional[IRValue] = None) -> Tuple[IRValue, List]:
         """Lower an expression. Returns (value, instructions).
@@ -1047,14 +1352,15 @@ class IRLowering:
             self.builder._current_line = node.line
 
         if isinstance(node, Literal):
-            ctype = to_ctype(node.vtype)
+            ctype = self._get_ctype(node)
             val = _cv(node.value, ctype)
             if dest:
                 return dest, [IRCopy(val, dest)]
             return val, []
 
         if isinstance(node, Identifier):
-            v = _vv(node.name, 'int')  # type resolved by semantic pass
+            ctype = self._get_ctype(node)
+            v = _vv(node.name, ctype)
             if dest:
                 return dest, [IRCopy(v, dest)]
             return v, []
@@ -1111,30 +1417,57 @@ class IRLowering:
             return self._lower_unary(node, dest)
 
         if isinstance(node, MemberAccess):
-            obj, obj_instrs = self._lower_expr(node.obj)
-            temp = dest or self.builder.new_temp('member', 'int')
+            ctype = self._get_ctype(node)
+            # Handle raw-string obj (parser stores obj as str for simple cases)
+            if isinstance(node.obj, str):
+                obj_name = node.obj
+                # WiFi property access: map to internal C variable name
+                if obj_name in self._wifi_names:
+                    wifi_prop_map = {
+                        'state':     f'_iotift_wifi_{obj_name}_state',
+                        'connected': f'_iotift_wifi_{obj_name}_connected',
+                        'ip':        f'_iotift_wifi_{obj_name}_ip',
+                        'rssi':      f'_iotift_wifi_{obj_name}_rssi',
+                        'channel':   f'_iotift_wifi_{obj_name}_channel',
+                        'mac':       f'_iotift_wifi_{obj_name}_mac',
+                        'clients':   f'_iotift_wifi_{obj_name}_client_count',
+                    }
+                    if node.member in wifi_prop_map:
+                        mapped_name = wifi_prop_map[node.member]
+                        # Return as a variable reference to the internal C var
+                        v = _vv(mapped_name, ctype)
+                        if dest:
+                            return dest, [IRCopy(v, dest)]
+                        return v, []
+                obj = _vv(obj_name, ctype)
+                obj_instrs = []
+            else:
+                obj, obj_instrs = self._lower_expr(node.obj)
+            temp = dest or self.builder.new_temp('member', ctype)
             instrs = []
             instrs.extend(obj_instrs)
             instrs.append(IRMemberAccess(obj, node.member, temp))
             return temp, instrs
 
         if isinstance(node, ArrayAccess):
+            ctype = self._get_ctype(node)
             idx, idx_instrs = self._lower_expr(node.index)
-            temp = dest or self.builder.new_temp('elem', 'int')
+            temp = dest or self.builder.new_temp('elem', ctype)
             instrs = []
             instrs.extend(idx_instrs)
-            base = _vv(node.name, 'int')
+            base = _vv(node.name, ctype)
             instrs.append(IRArrayAccess(base, idx, temp))
             return temp, instrs
 
         if isinstance(node, FnCall):
+            ctype = self._get_ctype(node)
             args = []
             instrs = []
             for a in node.args:
                 av, ai = self._lower_expr(a)
                 args.append(av)
                 instrs.extend(ai)
-            temp = dest or self.builder.new_temp('call', 'int')
+            temp = dest or self.builder.new_temp('call', ctype)
             # Map Iotift stdlib functions
             c_name = self._map_fn_name(node.name)
             # Track math function usage
@@ -1145,6 +1478,15 @@ class IRLowering:
             return temp, instrs
 
         if isinstance(node, MethodCall):
+            ctype = self._get_ctype(node)
+            # Check if this is a pin method call (e.g., LED.toggle(), TEMP.read())
+            obj_name = node.obj if isinstance(node.obj, str) else node.obj.name if hasattr(node.obj, 'name') else ''
+            if obj_name in self._pins:
+                return self._lower_pin_method(obj_name, node.method, node.args, dest)
+            # Check if this is a WiFi method call (e.g., scanner.scan())
+            if obj_name in self._wifi_names:
+                return self._lower_wifi_method(obj_name, node.method, node.args, dest)
+
             obj, obj_instrs = self._lower_expr(node.obj)
             args = []
             arg_instrs = []
@@ -1155,7 +1497,7 @@ class IRLowering:
             instrs = []
             instrs.extend(obj_instrs)
             instrs.extend(arg_instrs)
-            temp = dest or self.builder.new_temp('call', 'int')
+            temp = dest or self.builder.new_temp('call', ctype)
             arg_strs = ', '.join(a.name for a in args)
             instrs.append(IRCallIndirect(
                 func_expr=f'{obj.name}.{node.method}({arg_strs})',
@@ -1164,10 +1506,8 @@ class IRLowering:
             return temp, instrs
 
         if isinstance(node, (int, float)):
-            if isinstance(node, float):
-                val = _cv(node, 'float')
-            else:
-                val = _cv(node, 'int')
+            ctype = 'float' if isinstance(node, float) else 'int'
+            val = _cv(node, ctype)
             if dest:
                 return dest, [IRCopy(val, dest)]
             return val, []
@@ -1188,8 +1528,15 @@ class IRLowering:
         left, left_instrs = self._lower_expr(node.left)
         right, right_instrs = self._lower_expr(node.right)
 
-        # Determine type from operands
-        ctype = left.ctype if left.ctype else 'int'
+        # Determine type from semantic analysis, fallback to operand types
+        ctype = self._get_ctype(node)
+
+        # If semantic analysis didn't provide a specific type, infer from operands.
+        # Prefer the wider type to avoid truncation (e.g., int * float → float).
+        if ctype == 'int' and (left.ctype == 'float' or right.ctype == 'float'):
+            ctype = 'float'
+        elif ctype == 'float' and (left.ctype == 'double' or right.ctype == 'double'):
+            ctype = 'double'
 
         temp = dest or self.builder.new_temp('binop', ctype)
         instrs = []
@@ -1204,7 +1551,7 @@ class IRLowering:
 
     def _lower_unary(self, node: UnaryOp, dest: Optional[IRValue] = None) -> Tuple[IRValue, List]:
         operand, op_instrs = self._lower_expr(node.operand)
-        ctype = operand.ctype or 'int'
+        ctype = self._get_ctype(node)
         temp = dest or self.builder.new_temp('unary', ctype)
         instrs = []
         instrs.extend(op_instrs)
@@ -1214,6 +1561,101 @@ class IRLowering:
     # ─────────────────────────────────────────
     #  HELPERS
     # ─────────────────────────────────────────
+
+    def _lower_pin_method(self, pin_name: str, method: str, args: List, dest: Optional[IRValue] = None) -> Tuple[IRValue, List]:
+        """Lower a pin method call (e.g., LED.toggle()) to correct Arduino HAL calls."""
+        pin_node = self._pins.get(pin_name)
+        pin_dir = pin_node.direction if pin_node else 'output'
+        instrs = []
+
+        if method == 'high':
+            temp = dest or self.builder.new_temp('call', 'int')
+            instrs.append(IRCallIndirect(
+                func_expr=f'digitalWrite({pin_name}_PIN, HIGH)',
+                args=[], dest=temp,
+            ))
+            return temp, instrs
+        elif method == 'low':
+            temp = dest or self.builder.new_temp('call', 'int')
+            instrs.append(IRCallIndirect(
+                func_expr=f'digitalWrite({pin_name}_PIN, LOW)',
+                args=[], dest=temp,
+            ))
+            return temp, instrs
+        elif method == 'toggle':
+            temp = dest or self.builder.new_temp('call', 'int')
+            instrs.append(IRCallIndirect(
+                func_expr=f'digitalWrite({pin_name}_PIN, !digitalRead({pin_name}_PIN))',
+                args=[], dest=temp,
+            ))
+            return temp, instrs
+        elif method == 'read':
+            if pin_dir == 'analog':
+                temp = dest or self.builder.new_temp('call', 'int')
+                instrs.append(IRCall('analogRead', [_cv(pin_name + '_PIN', 'uint8_t')], dest=temp))
+                return temp, instrs
+            else:
+                temp = dest or self.builder.new_temp('call', 'int')
+                instrs.append(IRCall('digitalRead', [_cv(pin_name + '_PIN', 'uint8_t')], dest=temp))
+                return temp, instrs
+        elif method == 'write':
+            arg_vals = []
+            for a in args:
+                av, ai = self._lower_expr(a)
+                arg_vals.append(av)
+                instrs.extend(ai)
+            if pin_dir == 'pwm' and pin_name in self._pwm_pins:
+                ch = self._pwm_pins[pin_name]['channel']
+                temp = dest or self.builder.new_temp('call', 'int')
+                instrs.append(IRCall('ledcWrite', [_cv(ch, 'uint8_t')] + arg_vals, dest=temp))
+                return temp, instrs
+            elif pin_dir == 'analog':
+                # analogWrite is not available on ESP32; use ledc for PWM-capable pins
+                temp = dest or self.builder.new_temp('call', 'int')
+                instrs.append(IRCallIndirect(
+                    func_expr=f'dacWrite({pin_name}_PIN, {arg_vals[0].name if arg_vals else "0"})',
+                    args=arg_vals, dest=temp,
+                ))
+                return temp, instrs
+            else:
+                temp = dest or self.builder.new_temp('call', 'int')
+                instrs.append(IRCall('digitalWrite', [
+                    _cv(pin_name + '_PIN', 'uint8_t'),
+                    arg_vals[0] if arg_vals else _cv(0, 'int'),
+                ], dest=temp))
+                return temp, instrs
+
+        # Fallback for unknown methods
+        temp = dest or self.builder.new_temp('call', 'int')
+        instrs.append(IRCallIndirect(
+            func_expr=f'{pin_name}.{method}()',
+            args=[], dest=temp,
+        ))
+        return temp, instrs
+
+    def _lower_wifi_method(self, wifi_name: str, method: str, args: List, dest: Optional[IRValue] = None) -> Tuple[IRValue, List]:
+        """Lower a WiFi method call (e.g., scanner.scan()) to correct C function calls."""
+        instrs = []
+        temp = dest or self.builder.new_temp('call', 'int')
+
+        if method == 'scan':
+            instrs.append(IRCallIndirect(
+                func_expr=f'_iotift_wifi_{wifi_name}_scan_start()',
+                args=[], dest=temp,
+            ))
+        elif method == 'disconnect':
+            instrs.append(IRCallIndirect(
+                func_expr=f'_iotift_wifi_{wifi_name}_disconnect()',
+                args=[], dest=temp,
+            ))
+        else:
+            # Fallback
+            instrs.append(IRCallIndirect(
+                func_expr=f'{wifi_name}.{method}()',
+                args=[], dest=temp,
+            ))
+
+        return temp, instrs
 
     def _is_truthy(self, value_node: Any) -> bool:
         """Check if a value node represents a truthy constant."""

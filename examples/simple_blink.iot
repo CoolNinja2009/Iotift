@@ -1,0 +1,7 @@
+@device esp32
+
+pin LED = output 2;
+
+every 500 {
+    LED.toggle();
+}

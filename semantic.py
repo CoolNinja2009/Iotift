@@ -78,10 +78,13 @@ class SemanticAnalyzer:
         # (pins, timers, builtins are always "used")
         self._builtin_names: Set[str] = {
             'millis', 'micros', 'sin', 'cos', 'tan', 'sqrt', 'abs',
-            'pow', 'floor', 'ceil', 'round', 'log', 'exp',
+            'pow', 'floor', 'ceil', 'round', 'log', 'exp', 'atan2',
             'min', 'max', 'clamp', 'map',
             'print', 'println',
             'HIGH', 'LOW',
+            'digitalRead', 'digitalWrite', 'analogRead', 'analogWrite',
+            'scan_result_count', 'scan_result_ssid',
+            'scan_result_rssi', 'scan_result_channel',
         }
         # WiFi tracking (Milestone 8)
         self._wifi_decls: Dict[str, 'WifiDecl'] = {}
@@ -551,6 +554,14 @@ class SemanticAnalyzer:
             )
             if node.init is not None:
                 self._initialized.add(node.name)
+        elif isinstance(node, ArrayDecl):
+            # Local array inside a function/block
+            elem_type = self._resolve_type_name(node.elem_type or node.vtype)
+            arr_type = ArrayType(elem_type or INT, node.size)
+            self.symbols.define(
+                node.name, SymbolKind.VAR, type=arr_type, line=node.line,
+                is_mutable=node.is_mutable, is_global=False,
+            )
         elif isinstance(node, IfStmt):
             self.symbols.enter_scope()
             node._pass1_scope = self.symbols.current_scope  # type: ignore[attr-defined]
@@ -1167,7 +1178,9 @@ class SemanticAnalyzer:
         self._p3_walk_body(node.body)
 
     def _p3_loop(self, node: LoopBlock) -> None:
+        self.symbols.enter_scope(in_loop=True)
         self._p3_walk_body(node.body)
+        self.symbols.leave_scope()
 
     # ── statements ──
 
@@ -1273,7 +1286,9 @@ class SemanticAnalyzer:
                 f"while condition is '{cond_type.name}' (not bool)",
                 W_IMPLICIT_NARROWING,
             )
+        self.symbols.enter_scope(in_loop=True)
         self._p3_walk_body(node.body)
+        self.symbols.leave_scope()
 
     def _p3_for(self, node: ForStmt) -> None:
         if node.init:
@@ -1288,7 +1303,9 @@ class SemanticAnalyzer:
                 )
         if node.step:
             self._p3_node(node.step)
+        self.symbols.enter_scope(in_loop=True)
         self._p3_walk_body(node.body)
+        self.symbols.leave_scope()
 
     def _p3_return(self, node: ReturnStmt) -> None:
         ret_type = self.symbols._current_fn_return_type
@@ -1759,6 +1776,15 @@ class SemanticAnalyzer:
                     f"(wifi '{obj_sym.name}' is {mode.upper()})",
                 )
             # Both .scan() and .disconnect() return void
+            self._set_type(node, VOID)
+            return VOID
+
+        # Pin methods: .read() returns int for input/analog pins
+        if obj_sym and obj_sym.kind == SymbolKind.PIN:
+            if node.method == 'read':
+                self._set_type(node, INT)
+                return INT
+            # .high(), .low(), .toggle(), .write(), .setup() -> void
             self._set_type(node, VOID)
             return VOID
 

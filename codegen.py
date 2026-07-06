@@ -235,7 +235,8 @@ class CodeGen:
             self._user_fns.append(
                 self._make_fn('void', '_iotift_tick', '', body_lines)
             )
-            self._loop_calls.append('_iotift_tick();')
+            # tick runs once at startup (in setup), not on every loop iteration
+            self._setup_lines.append('_iotift_tick();')
 
         elif isinstance(node, PwmSetup):
             # Top-level PwmSetup overrides defaults before setup() is emitted.
@@ -248,7 +249,8 @@ class CodeGen:
             pass
 
         elif isinstance(node, (Assign, CompoundAssign, FnCall, MethodCall,
-                                PrintStmt, PwmWrite, ExprStmt)):
+                                PrintStmt, PwmWrite, ExprStmt,
+                                StartStmt, StopStmt)):
             self._setup_lines.extend(self._stmt_lines(node))
 
         elif isinstance(node, AssignAfter):
@@ -337,9 +339,23 @@ class CodeGen:
     def _collect_on_threshold(self, node: OnThreshold) -> None:
         if not node.body:
             return
-        fn_name = f"_iotift_threshold_{node.pin}"
+        # Include operator + value hash to make name unique for multiple thresholds on same pin
+        val_str = str(hash(str(node.value))) if node.value else '0'
+        fn_name = f"_iotift_threshold_{node.pin}_{node.op}_{val_str}"
         val = self._expr_c(node.value)
-        body = [f"  if ({node.pin} {node.op} {val}) {{"]
+
+        # Read the pin value first — use analogRead for analog pins, digitalRead for digital pins
+        pin_decl = self._pins.get(node.pin)
+        if pin_decl and pin_decl.direction == 'analog':
+            body = [
+                f"  int {node.pin} = analogRead({node.pin}_PIN);",
+                f"  if ({node.pin} {node.op} {val}) {{",
+            ]
+        else:
+            body = [
+                f"  int {node.pin} = digitalRead({node.pin}_PIN);",
+                f"  if ({node.pin} {node.op} {val}) {{",
+            ]
         for s in node.body:
             body.extend(self._stmt_lines(s, '    '))
         body.append('  }')
@@ -426,6 +442,8 @@ class CodeGen:
         self._lines.append('#include <Arduino.h>')
         if self._uses_math:
             self._lines.append('#include <math.h>')
+        if self._has_wifi:
+            self._lines.append('#include <WiFi.h>')
         for inc in sorted(self._includes):
             self._lines.append(inc)
         for code in self._header_blocks:
@@ -891,6 +909,13 @@ class CodeGen:
             return self._if_lines(node, indent)
         if isinstance(node, WhileStmt):
             return self._while_lines(node, indent)
+        if isinstance(node, LoopBlock):
+            # Infinite loop inside a function body → while(1) { ... }
+            lines = [f'{indent}while (1) {{']
+            for s in node.body:
+                lines.extend(self._stmt_lines(s, indent + '  '))
+            lines.append(f'{indent}}}')
+            return lines
         if isinstance(node, ForStmt):
             return self._for_lines(node, indent)
         if isinstance(node, CBlockNode):
@@ -907,6 +932,11 @@ class CodeGen:
             for s in node.body:
                 lines.extend(self._stmt_lines(s, indent))
             return lines
+        if isinstance(node, AfterBlock):
+            # Inline after block: emit as comment + body (one-shot timer not inlined yet)
+            return [f'{indent}// after {node.interval}ms {{'] + [
+                ln for s in node.body for ln in self._stmt_lines(s, indent + '  ')
+            ] + [f'{indent}// }} (end after)']
         # Single-line statements
         return [indent + self._stmt_c(node)]
 
@@ -979,10 +1009,17 @@ class CodeGen:
                 if self._device.startswith('esp32'):
                     return 'asm("break 0,0");'
                 return '/* breakpoint */'
+            # Track math function usage for <math.h> include
+            if node.name in ('sin', 'cos', 'tan', 'sqrt', 'pow', 'floor', 'ceil',
+                            'round', 'log', 'exp', 'fabs', 'abs', 'atan2'):
+                self._uses_math = True
             return f'{node.name}({args});'
 
         # ── MethodCall ────────────────────────
         if isinstance(node, MethodCall):
+            # Translate pin method calls to Arduino HAL
+            if isinstance(node.obj, str) and node.obj in self._pins:
+                return self._pin_method_c(node.obj, node.method, node.args, True)
             args = ', '.join(self._expr_c(a) for a in node.args)
             obj_str = self._expr_c(node.obj)
             return f'{obj_str}.{node.method}({args});'
@@ -1001,12 +1038,22 @@ class CodeGen:
             res = self._expr_c(node.resolution)
             return f'// {node.pin}.setup({freq}, {res}) — applied in setup()'
 
-        # ── StopStmt ──────────────────────────
+        # ── StopStmt / StartStmt ──────────────
         if isinstance(node, StopStmt):
             if node.label in self._every_labels:
                 active_var = self._every_labels[node.label]
                 return f'{active_var} = 0;'
             return f'// stop {node.label}: label not found'
+        if isinstance(node, StartStmt):
+            if node.label in self._every_labels:
+                active_var = self._every_labels[node.label]
+                return f'{active_var} = 1;'
+            return f'// start {node.label}: label not found'
+
+        # ── AfterBlock (inside a function) ────
+        # Emit as inline one-shot: record time and check in subsequent calls
+        if isinstance(node, AfterBlock):
+            return f'// after {node.interval}ms {{ ... }} (one-shot) — not yet inlined'
 
         raise CodeGenError(
             f'Line {getattr(node, "line", "?")}: '
@@ -1172,6 +1219,9 @@ class CodeGen:
                     return f'_iotift_wifi_{node.obj}_scan_start()'
                 elif node.method == 'disconnect':
                     return f'_iotift_wifi_{node.obj}_disconnect()'
+            # Pin method calls
+            if isinstance(node.obj, str) and node.obj in self._pins:
+                return self._pin_method_c(node.obj, node.method, node.args, False)
             args = ', '.join(self._expr_c(a) for a in node.args)
             obj = self._expr_c(node.obj)
             return f'{obj}.{node.method}({args})'
@@ -1183,11 +1233,6 @@ class CodeGen:
         if isinstance(node, FnCall):
             args = ', '.join(self._expr_c(a) for a in node.args)
             return f'{node.name}({args})'
-
-        if isinstance(node, MethodCall):
-            args = ', '.join(self._expr_c(a) for a in node.args)
-            obj = self._expr_c(node.obj)
-            return f'{obj}.{node.method}({args})'
 
         # Raw scalars
         if isinstance(node, (int, float)):
@@ -1211,11 +1256,8 @@ class CodeGen:
         # Check for string interpolation: "temp: {x}"
         if isinstance(val, Literal) and val.vtype == 'str':
             s = val.value
-            parts = re.split(r'\{(\w+)\}', s)
+            parts = re.split(r'\{([^{}]+)\}', s)
             if len(parts) > 1:
-                # Interpolated string — emit multiple print calls
-                # For now, emit as a comment + the interpolated form
-                # Full interpolation needs multiple print calls
                 return self._interpolate_string(s, func)
 
         # Check if string concatenation with +
@@ -1233,9 +1275,12 @@ class CodeGen:
 
     def _interpolate_string(self, template: str, func: str) -> str:
         """Convert "temp: {x}°C" to Serial.print calls."""
-        parts = re.split(r'\{(\w+)\}', template)
+        parts = re.split(r'\{([^{}]+)\}', template)
         if len(parts) == 1:
             return f'{func}("{parts[0]}");'
+
+        # Find the last non-empty part index for correct println/print decision
+        last_non_empty = max(i for i, p in enumerate(parts) if p)
 
         calls: List[str] = []
         for i, part in enumerate(parts):
@@ -1243,17 +1288,25 @@ class CodeGen:
                 continue
             if i % 2 == 0:
                 # Literal text
-                if i == len(parts) - 1:
-                    # Last part uses println/print
+                if i == last_non_empty:
                     calls.append(f'{func}("{part}");')
                 else:
                     calls.append(f'Serial.print("{part}");')
             else:
-                # Variable interpolation
-                if i == len(parts) - 1:
-                    calls.append(f'{func}({part});')
+                # Expression interpolation: emit the expression as raw C
+                # For simple identifiers, use them directly; otherwise wrap in parens
+                if re.match(r'^[\w_]+$', part):
+                    expr_c = part
+                elif re.match(r'^[\w_]+\.[\w_]+$', part):
+                    # member access like wifi.connected → resolve via _expr_c
+                    expr_c = part
                 else:
-                    calls.append(f'Serial.print({part});')
+                    # Complex expression — emit raw (the AST already has C-compatible ops)
+                    expr_c = f'({part})' if not part.startswith('(') else part
+                if i == last_non_empty:
+                    calls.append(f'{func}({expr_c});')
+                else:
+                    calls.append(f'Serial.print({expr_c});')
         return ' '.join(calls)
 
     # ─────────────────────────────────────────
@@ -1273,6 +1326,48 @@ class CodeGen:
         if node.init is None:
             return f'{prefix}{ctype} {node.name};'
         return f'{prefix}{ctype} {node.name} = {self._expr_c(node.init)};'
+
+    def _pin_method_c(self, pin_name: str, method: str,
+                       args: list, is_stmt: bool = False) -> str:
+        """Translate a pin method call to Arduino HAL C code.
+
+        Args:
+            pin_name: The pin name (e.g., 'LED')
+            method: The method name (e.g., 'toggle', 'high', 'read')
+            args: The list of argument expressions
+            is_stmt: True if this is a standalone statement (needs semicolon handled by caller)
+        """
+        pin_decl = self._pins.get(pin_name)
+        pin_dir = pin_decl.direction if pin_decl else 'output'
+
+        if method == 'high':
+            return f'digitalWrite({pin_name}_PIN, HIGH)'
+        elif method == 'low':
+            return f'digitalWrite({pin_name}_PIN, LOW)'
+        elif method == 'toggle':
+            return f'digitalWrite({pin_name}_PIN, !digitalRead({pin_name}_PIN))'
+        elif method == 'read':
+            if pin_dir == 'analog':
+                return f'analogRead({pin_name}_PIN)'
+            else:
+                return f'digitalRead({pin_name}_PIN)'
+        elif method == 'write':
+            arg_str = ', '.join(self._expr_c(a) for a in args) if args else '0'
+            if pin_dir == 'pwm' and pin_name in self._pwm_pins:
+                ch = self._pwm_pins[pin_name]['channel']
+                return f'ledcWrite({ch}U, (uint32_t)({arg_str}))'
+            elif pin_dir == 'analog':
+                return f'dacWrite({pin_name}_PIN, {arg_str})'
+            else:
+                return f'digitalWrite({pin_name}_PIN, ({arg_str}) ? HIGH : LOW)'
+        elif method == 'setup':
+            freq = self._expr_c(args[0]) if args else '5000'
+            res = self._expr_c(args[1]) if len(args) > 1 else '8'
+            return f'// {pin_name}.setup({freq}, {res}) -- applied in setup()'
+        else:
+            # Fallback: raw method call
+            arg_str = ', '.join(self._expr_c(a) for a in args) if args else ''
+            return f'{pin_name}.{method}({arg_str})'
 
     def _target_c(self, target: Any) -> str:
         """Convert an assignment target to a C lvalue string."""

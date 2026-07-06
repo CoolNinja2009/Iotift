@@ -269,6 +269,7 @@ class IRGlobal:
     is_volatile: bool = False
     is_pin: bool = False
     pin_number: int = 0
+    array_size: int = 0  # >0 for array types like float[10]
 
 
 @dataclass
@@ -317,6 +318,7 @@ class IRModule:
 
     # Pin registry
     pins: Dict[str, int] = field(default_factory=dict)       # name → number
+    pin_directions: Dict[str, str] = field(default_factory=dict)  # name → direction
     pwm_pins: Dict[str, Dict] = field(default_factory=dict)   # name → {channel, freq, resolution}
     pwm_channel: int = 0
     analog_pins: List[str] = field(default_factory=list)
@@ -342,6 +344,9 @@ class IRModule:
 
     # Scheduler
     scheduler_needed: bool = False
+
+    # WiFi
+    has_wifi: bool = False
 
     # Source map (Milestone 5)
     source_path: str = ''

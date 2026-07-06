@@ -1,0 +1,20 @@
+@device esp32
+
+pin BTN = input 5 { pull: up, debounce: 50ms };
+pin LED = output 13;
+
+int press_count = 0;
+
+on BTN.press {
+    press_count = press_count + 1;
+    LED.toggle();
+    println("Button pressed {press_count} times");
+}
+
+on BTN.release {
+    println("Button released");
+}
+
+every 10000 {
+    println("Uptime: {millis()} ms, presses: {press_count}");
+}

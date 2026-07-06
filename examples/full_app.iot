@@ -1,0 +1,324 @@
+@device esp32
+
+// =============================================================================
+// FULL APPLICATION STRESS TEST
+// A complete IoT thermostat + lighting controller
+// =============================================================================
+
+// ── Hardware Pins ──────────────────────────────────────────────────
+pin HEATER     = output 4;
+pin COOLER     = output 5;
+pin FAN        = output 15;
+pin LED_STATUS = output 13;
+pin LED_WIFI   = output 12;
+pin LED_ALERT  = output 14;
+pin TEMP_IN    = analog 36;
+pin HUMID_IN   = analog 39;
+pin BTN_MODE   = input 5 { pull: up, debounce: 50ms };
+pin BTN_RESET  = input 18 { pull: up, debounce: 30ms };
+
+// ── Constants ───────────────────────────────────────────────────────
+const float TEMP_MIN      = 18.0;
+const float TEMP_MAX      = 28.0;
+const float TEMP_DEFAULT  = 22.0;
+const int   ADC_MAX       = 4095;
+const float VREF          = 3.3;
+const int   LOG_INTERVAL  = 30;
+
+// ── Struct ──────────────────────────────────────────────────────────
+struct SensorReading {
+    int id;
+    float temp;
+    float humidity;
+    int timestamp;
+}
+
+// ── Enum ────────────────────────────────────────────────────────────
+enum SystemMode {
+    MODE_OFF,
+    MODE_HEAT,
+    MODE_COOL,
+    MODE_FAN_ONLY,
+    MODE_AUTO
+}
+
+enum AlertLevel {
+    ALERT_NONE,
+    ALERT_INFO,
+    ALERT_WARNING,
+    ALERT_CRITICAL
+}
+
+// ── WiFi ────────────────────────────────────────────────────────────
+wifi primary {
+    ssid: "HomeNetwork",
+    password: "secure123",
+    hostname: "iotift-thermostat",
+    retry: forever,
+    connect_timeout: 30s
+};
+
+// ── Global State (using int for enum types due to current limitations) ──
+int sys_mode        = MODE_AUTO;
+float target_temp   = TEMP_DEFAULT;
+float current_temp  = 21.5;
+float current_humid = 55.0;
+int alert_level     = ALERT_NONE;
+int wifi_ok         = 0;
+int sensor_errors   = 0;
+int log_counter     = 0;
+int btn_presses     = 0;
+int uptime_seconds  = 0;
+float energy_used   = 0.0;
+
+SensorReading last_reading;
+float temp_history[10];
+
+// ── Helper Functions ────────────────────────────────────────────────
+
+fn read_temperature() -> float {
+    int raw = TEMP_IN.read();
+    float volts = (raw as float) * VREF / (ADC_MAX as float);
+    return volts * 100.0;
+}
+
+fn read_humidity() -> float {
+    int raw = HUMID_IN.read();
+    float volts = (raw as float) * VREF / (ADC_MAX as float);
+    float hum = volts * 30.0;
+    if (hum > 100.0) {
+        hum = 100.0;
+    }
+    if (hum < 0.0) {
+        hum = 0.0;
+    }
+    return hum;
+}
+
+fn update_sensor_history() {
+    int i = 9;
+    while (i > 0) {
+        temp_history[i] = temp_history[i - 1];
+        i = i - 1;
+    }
+    temp_history[0] = current_temp;
+}
+
+fn compute_average_temp() -> float {
+    float sum = 0.0;
+    int i = 0;
+    int count = 0;
+    while (i < 10) {
+        if (temp_history[i] > 0.0) {
+            sum = sum + temp_history[i];
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    if (count == 0) {
+        return current_temp;
+    }
+    return sum / (count as float);
+}
+
+fn determine_alert(float temp, float target) -> int {
+    float diff = temp - target;
+    float abs_diff = abs(diff);
+
+    if (abs_diff > 5.0) {
+        return ALERT_CRITICAL;
+    } else if (abs_diff > 3.0) {
+        return ALERT_WARNING;
+    } else if (abs_diff > 1.0) {
+        return ALERT_INFO;
+    }
+    return ALERT_NONE;
+}
+
+fn control_outputs(float temp, float target) {
+    float diff = temp - target;
+
+    if (sys_mode == MODE_OFF) {
+        HEATER.low();
+        COOLER.low();
+        FAN.low();
+        return;
+    }
+
+    if (sys_mode == MODE_HEAT || (sys_mode == MODE_AUTO && diff < -0.3)) {
+        HEATER.high();
+        COOLER.low();
+        FAN.high();
+        energy_used = energy_used + 0.01;
+    } else if (sys_mode == MODE_COOL || (sys_mode == MODE_AUTO && diff > 0.3)) {
+        HEATER.low();
+        COOLER.high();
+        FAN.high();
+        energy_used = energy_used + 0.02;
+    } else if (sys_mode == MODE_FAN_ONLY) {
+        HEATER.low();
+        COOLER.low();
+        FAN.high();
+    } else {
+        HEATER.low();
+        COOLER.low();
+        FAN.low();
+    }
+}
+
+fn update_alert_led(int level) {
+    if (level == ALERT_CRITICAL) {
+        LED_ALERT.high();
+    } else if (level == ALERT_WARNING) {
+        LED_ALERT.low();
+    } else if (level == ALERT_INFO) {
+        LED_ALERT.low();
+    } else {
+        LED_ALERT.low();
+    }
+}
+
+fn format_alert(int level) {
+    if (level == ALERT_CRITICAL) {
+        println("  Alert: CRITICAL!");
+    } else if (level == ALERT_WARNING) {
+        println("  Alert: WARNING");
+    } else if (level == ALERT_INFO) {
+        println("  Alert: INFO");
+    } else {
+        println("  Alert: NONE");
+    }
+}
+
+fn log_sensor_data(float temp, float hum, int alert) {
+    println("=== Sensor Log #{log_counter} ===");
+    println("  Temperature: {temp} C (target: {target_temp} C)");
+    println("  Humidity:    {hum} %");
+    println("  Mode:        {sys_mode}");
+    println("  WiFi:        {wifi_ok}");
+    format_alert(alert);
+    float avg_temp = compute_average_temp();
+    println("  Avg Temp:    {avg_temp} C");
+    println("  Energy:      {energy_used} kWh");
+    println("  Uptime:      {uptime_seconds} s");
+}
+
+// ── Initialize sensor history ───────────────────────────────────────
+int init_i = 0;
+while (init_i < 10) {
+    temp_history[init_i] = TEMP_DEFAULT;
+    init_i = init_i + 1;
+}
+
+// ── WiFi Events ─────────────────────────────────────────────────────
+
+on primary.connect {
+    wifi_ok = 1;
+    LED_WIFI.high();
+    println("WiFi connected: {primary.ip}");
+}
+
+on primary.disconnect {
+    wifi_ok = 0;
+    LED_WIFI.low();
+    println("WiFi disconnected");
+}
+
+on primary.got_ip {
+    println("Got IP: {primary.ip}, RSSI: {primary.rssi}");
+}
+
+// ── Button Events ───────────────────────────────────────────────────
+
+on BTN_MODE.press {
+    btn_presses = btn_presses + 1;
+    sys_mode = (sys_mode + 1) % 5;
+    println("Button press #{btn_presses}, mode={sys_mode}");
+}
+
+on BTN_RESET.press {
+    sensor_errors = 0;
+    alert_level = ALERT_NONE;
+    LED_ALERT.low();
+    println("System reset");
+}
+
+// ── Temperature Alerts ──────────────────────────────────────────────
+
+on TEMP_IN > 35.0 {
+    println("HIGH TEMPERATURE ALERT: {current_temp} C");
+    alert_level = ALERT_CRITICAL;
+}
+
+on TEMP_IN < 5.0 {
+    println("LOW TEMPERATURE ALERT: {current_temp} C");
+    alert_level = ALERT_CRITICAL;
+}
+
+// ── Sensor Reading Timer ────────────────────────────────────────────
+
+every 2000 {
+    current_temp = read_temperature();
+    current_humid = read_humidity();
+    alert_level = determine_alert(current_temp, target_temp);
+    control_outputs(current_temp, target_temp);
+    update_sensor_history();
+}
+
+// ── Alert LED Update ────────────────────────────────────────────────
+
+every 500 {
+    update_alert_led(alert_level);
+}
+
+// ── Status LED Heartbeat ────────────────────────────────────────────
+
+every 1000 {
+    LED_STATUS.toggle();
+}
+
+// ── Periodic Logging (every 30 seconds) ─────────────────────────────
+
+every 30000 {
+    log_counter = log_counter + 1;
+    log_sensor_data(current_temp, current_humid, alert_level);
+}
+
+// ── Uptime Counter ──────────────────────────────────────────────────
+
+every 1000 as uptime_counter {
+    uptime_seconds = uptime_seconds + 1;
+}
+
+// ── Startup Sequence ────────────────────────────────────────────────
+
+println("╔══════════════════════════════════╗");
+println("║  Iotift Thermostat v2.0         ║");
+println("║  Full Application Stress Test   ║");
+println("╚══════════════════════════════════╝");
+println("Target: {target_temp} C, Mode: {sys_mode}");
+
+after 5s {
+    println("System running for 5 seconds");
+}
+
+after 60s {
+    println("=== 60-SECOND SUMMARY ===");
+    float avg = compute_average_temp();
+    println("Avg temp:     {avg} C");
+    println("Button presses: {btn_presses}");
+    println("Energy used:    {energy_used} kWh");
+    println("System mode:    {sys_mode}");
+    println("WiFi status:    {wifi_ok}");
+}
+
+// Defer demo: cleanup on shutdown
+defer {
+    HEATER.low();
+    COOLER.low();
+    FAN.low();
+    LED_STATUS.low();
+    LED_WIFI.low();
+    LED_ALERT.low();
+    println("System shutdown complete");
+}

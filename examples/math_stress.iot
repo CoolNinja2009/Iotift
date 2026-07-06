@@ -1,0 +1,80 @@
+@device esp32
+
+// Stress test: complex math expressions and all math functions
+pin LED = output 13;
+
+float x = 0.0;
+float y = 0.0;
+float z = 0.0;
+float t = 0.0;
+int iterations = 0;
+
+fn compute_wave(float freq, float amp, float phase) -> float {
+    return amp * sin(freq * t + phase);
+}
+
+fn normalize(float val, float min_val, float max_val) -> float {
+    return (val - min_val) / (max_val - min_val);
+}
+
+fn lerp(float a, float b, float t_) -> float {
+    return a + (b - a) * t_;
+}
+
+fn clamp(float val, float lo, float hi) -> float {
+    if (val < lo) {
+        return lo;
+    } else if (val > hi) {
+        return hi;
+    }
+    return val;
+}
+
+fn complex_calc(float in_val) -> float {
+    float a = sin(in_val * 0.5);
+    float b = cos(in_val * 0.3);
+    float c = a * a + b * b;
+    float d = sqrt(c);
+    float e = d * exp(-in_val * 0.001);
+    float fv = log(1.0 + abs(in_val));
+    float result = e * fv;
+    return result;
+}
+
+every 100 {
+    t = millis() * 0.001;
+    iterations = iterations + 1;
+
+    // Complex nested math
+    x = compute_wave(1.0, 10.0, 0.0);
+    y = compute_wave(2.5, 5.0, 1.57);
+    z = compute_wave(0.5, 3.0, 3.14);
+
+    float combined = x + y + z;
+    float normalized = normalize(combined, -18.0, 18.0);
+    float lerped = lerp(0.0, 255.0, normalized);
+    float clamped = clamp(lerped, 0.0, 255.0);
+
+    LED.write(clamped);
+
+    // Stress test: deeply nested expression
+    float deep = sin(cos(sin(cos(t * 0.1) * 2.0) * 3.0) * 4.0) + sqrt(abs(sin(t * 0.05)));
+
+    // Conditional math
+    float result;
+    if (deep > 0.5) {
+        result = pow(deep, 2.0) + log(abs(deep) + 1.0);
+    } else if (deep < -0.5) {
+        result = -pow(abs(deep), 2.0) - log(abs(deep) + 1.0);
+    } else {
+        result = deep * 10.0;
+    }
+
+    // Accumulate with overflow protection via clamping
+    x = clamp(x + result * 0.01, -100.0, 100.0);
+}
+
+every 5000 {
+    println("Math stress #{iterations}: x={x} y={y} z={z}");
+    println("  combined={x + y + z} led={clamp(lerp(0.0, 255.0, normalize(x + y + z, -18.0, 18.0)), 0.0, 255.0)}");
+}

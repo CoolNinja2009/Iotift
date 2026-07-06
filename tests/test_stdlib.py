@@ -128,21 +128,20 @@ class TestMathStdlib:
     """Math stdlib functions generate correct C code."""
 
     def test_math_import_includes_math_header(self):
-        """Explicit math import should include math.h."""
+        """math.h is included only when math functions are actually used."""
         c = compile_stdlib(
             'import "math";\n'
             'pin LED = output 2;\n'
-            'every 500 { }\n'
+            'every 500 { float x = sin(0.5); }\n'
         )
         assert '#include <math.h>' in c
 
     def test_math_header_from_prelude(self):
-        """Prelude math should also include math.h."""
+        """Prelude math should include math.h when math is called."""
         c = compile_stdlib(
             'pin LED = output 2;\n'
             'every 500 { float x = sin(0.5); }\n'
         )
-        # <math.h> comes from c header block in math.iot
         assert '#include <math.h>' in c
 
     def test_sin_cos_tan(self):
