@@ -40,6 +40,16 @@ _CTYPE: Dict[str, str] = {
     'uint':  'unsigned int',
 }
 
+# Functions declared by <Arduino.h> or <math.h> — suppress extern declarations
+# for these since the headers already provide them.
+_ARDUINO_BUILTINS: set = {
+    'millis', 'micros', 'delay', 'delay_us',
+    'digitalRead', 'digitalWrite', 'pinMode', 'analogRead', 'analogWrite',
+    'sin', 'cos', 'tan', 'sqrt', 'abs', 'fabs',
+    'pow', 'floor', 'ceil', 'round', 'log', 'exp',
+}
+
+
 
 def to_ctype(name: str) -> str:
     """Map Iotift type name to C type."""
@@ -186,6 +196,9 @@ class IRLowering:
             self._lower_fn_decl(node)
 
         elif isinstance(node, ExternFnDecl):
+            # Suppress extern declarations for Arduino builtins (<Arduino.h> provides them)
+            if node.name in _ARDUINO_BUILTINS:
+                return
             # Extern function: just register as global declaration
             ret = to_ctype(node.return_type or 'void')
             params = ', '.join(
@@ -194,7 +207,6 @@ class IRLowering:
             self.module.global_blocks.append(
                 f'extern {ret} {node.name}({params});'
             )
-
         elif isinstance(node, CBlockNode):
             if not node.code.strip():
                 return
@@ -507,7 +519,8 @@ class IRLowering:
             for instr in stmt_lines:
                 self.builder.emit(instr)
 
-        self.builder.emit(IRJump(end_label))
+        if not self.builder.current_block.is_terminated:
+            self.builder.emit(IRJump(end_label))
         self.builder.new_block(end_label)
         self.builder.emit(IRReturn())
 
@@ -554,7 +567,8 @@ class IRLowering:
         for stmt in node.body:
             for instr in self._lower_stmt(stmt):
                 self.builder.emit(instr)
-        self.builder.emit(IRJump(end_label))
+        if not self.builder.current_block.is_terminated:
+            self.builder.emit(IRJump(end_label))
 
         self.builder.new_block(end_label)
         self.builder.emit(IRReturn())
@@ -618,7 +632,8 @@ class IRLowering:
             stmt_instrs = self._lower_stmt(stmt)
             for instr in stmt_instrs:
                 self.builder.emit(instr)
-        self.builder.emit(IRJump(end_label))
+        if not self.builder.current_block.is_terminated:
+            self.builder.emit(IRJump(end_label))
 
         self.builder.new_block(end_label)
         self.builder.emit(IRReturn())
@@ -698,7 +713,8 @@ class IRLowering:
             stmt_instrs = self._lower_stmt(stmt)
             for instr in stmt_instrs:
                 self.builder.emit(instr)
-        self.builder.emit(IRJump(end_label))
+        if not self.builder.current_block.is_terminated:
+            self.builder.emit(IRJump(end_label))
 
         self.builder.new_block(end_label)
         self.builder.emit(IRReturn())
@@ -769,7 +785,8 @@ class IRLowering:
             stmt_instrs = self._lower_stmt(stmt)
             for instr in stmt_instrs:
                 self.builder.emit(instr)
-        self.builder.emit(IRJump(end_label))
+        if not self.builder.current_block.is_terminated:
+            self.builder.emit(IRJump(end_label))
 
         self.builder.new_block(end_label)
         self.builder.emit(IRReturn())
@@ -932,12 +949,18 @@ class IRLowering:
         if isinstance(node.target, str):
             # Check if it's a pin
             if node.target in self._pins and node.target not in self._pwm_pins:
-                # digitalWrite shortcut
-                level = 'HIGH' if self._is_truthy(node.value) else 'LOW'
-                instrs.append(IRCallIndirect(
-                    func_expr=f'digitalWrite({node.target}_PIN, {level})',
-                    args=[], dest=None,
-                ))
+                # Pin write: digitalWrite for booleans, analogWrite for ranged values
+                if self._is_trivial_boolean(node.value):
+                    level = 'HIGH' if self._is_truthy(node.value) else 'LOW'
+                    instrs.append(IRCallIndirect(
+                        func_expr=f'digitalWrite({node.target}_PIN, {level})',
+                        args=[], dest=None,
+                    ))
+                else:
+                    instrs.append(IRCall('analogWrite', [
+                        _cv(node.target + '_PIN', 'uint8_t'),
+                        val,
+                    ], dest=None))
             else:
                 instrs.append(IRCopy(val, _vv(node.target, val.ctype)))
         elif isinstance(node.target, ArrayAccess):
@@ -1036,7 +1059,8 @@ class IRLowering:
             for s in node.then_body:
                 for inst in self._lower_stmt(s):
                     self.builder.emit(inst)
-            self.builder.emit(IRJump(end_label))
+            if not self.builder.current_block.is_terminated:
+                self.builder.emit(IRJump(end_label))
         else:
             # if/elif/else chain — create proper cascade
             then_label = self.builder.new_label('then')
@@ -1048,7 +1072,8 @@ class IRLowering:
             for s in node.then_body:
                 for inst in self._lower_stmt(s):
                     self.builder.emit(inst)
-            self.builder.emit(IRJump(end_label))
+            if not self.builder.current_block.is_terminated:
+                self.builder.emit(IRJump(end_label))
 
             # Elif chain
             current_label = first_else_label
@@ -1073,14 +1098,16 @@ class IRLowering:
                     for s in eb:
                         for inst in self._lower_stmt(s):
                             self.builder.emit(inst)
-                    self.builder.emit(IRJump(end_label))
+                    if not self.builder.current_block.is_terminated:
+                        self.builder.emit(IRJump(end_label))
 
                     # Else body block
                     self.builder.new_block(else_body_label)
                     for s in node.else_body:
                         for inst in self._lower_stmt(s):
                             self.builder.emit(inst)
-                    self.builder.emit(IRJump(end_label))
+                    if not self.builder.current_block.is_terminated:
+                        self.builder.emit(IRJump(end_label))
                 elif is_last:
                     # Last elif, no else — branch to body or end
                     body_label = self.builder.new_label('elif_body')
@@ -1090,7 +1117,8 @@ class IRLowering:
                     for s in eb:
                         for inst in self._lower_stmt(s):
                             self.builder.emit(inst)
-                    self.builder.emit(IRJump(end_label))
+                    if not self.builder.current_block.is_terminated:
+                        self.builder.emit(IRJump(end_label))
                 else:
                     # Not last elif — continue chain
                     next_test_label = self.builder.new_label('elif_chain')
@@ -1102,7 +1130,8 @@ class IRLowering:
                     for s in eb:
                         for inst in self._lower_stmt(s):
                             self.builder.emit(inst)
-                    self.builder.emit(IRJump(end_label))
+                    if not self.builder.current_block.is_terminated:
+                        self.builder.emit(IRJump(end_label))
 
                     # Continue chain
                     current_label = next_test_label
@@ -1118,7 +1147,8 @@ class IRLowering:
                 for s in node.else_body:
                     for inst in self._lower_stmt(s):
                         self.builder.emit(inst)
-                self.builder.emit(IRJump(end_label))
+                if not self.builder.current_block.is_terminated:
+                    self.builder.emit(IRJump(end_label))
 
         # End block (continuation after the if)
         self.builder.new_block(end_label)
@@ -1277,9 +1307,11 @@ class IRLowering:
                             # Simple variable name
                             instrs.append(IRCall(f, [_vv(part, 'int')], dest=None))
                         else:
-                            # Complex expression — emit as literal for now
-                            # (parser should pre-parse these in the future)
-                            instrs.append(IRCall(f, [_cv(f'({part})', 'str')], dest=None))
+                            # Complex expression — emit raw C via IRCallIndirect
+                            # (Iotift expression syntax is C-compatible)
+                            instrs.append(IRCallIndirect(
+                                func_expr=f'{f}({part})', args=[], dest=None,
+                            ))
                 return instrs
 
         instrs.append(IRCall(func, [val], dest=None))
@@ -1467,7 +1499,11 @@ class IRLowering:
                 av, ai = self._lower_expr(a)
                 args.append(av)
                 instrs.extend(ai)
-            temp = dest or self.builder.new_temp('call', ctype)
+            # For void-returning functions called as statements, don't create a temp
+            if ctype == 'void' and dest is None:
+                temp = None
+            else:
+                temp = dest or self.builder.new_temp('call', ctype)
             # Map Iotift stdlib functions
             c_name = self._map_fn_name(node.name)
             # Track math function usage
@@ -1497,13 +1533,16 @@ class IRLowering:
             instrs = []
             instrs.extend(obj_instrs)
             instrs.extend(arg_instrs)
-            temp = dest or self.builder.new_temp('call', ctype)
+            if ctype == 'void' and dest is None:
+                temp = None
+            else:
+                temp = dest or self.builder.new_temp('call', ctype)
             arg_strs = ', '.join(a.name for a in args)
             instrs.append(IRCallIndirect(
                 func_expr=f'{obj.name}.{node.method}({arg_strs})',
                 args=args, dest=temp,
             ))
-            return temp, instrs
+            return temp or _void(), instrs
 
         if isinstance(node, (int, float)):
             ctype = 'float' if isinstance(node, float) else 'int'
@@ -1569,26 +1608,26 @@ class IRLowering:
         instrs = []
 
         if method == 'high':
-            temp = dest or self.builder.new_temp('call', 'int')
+            irdest = dest if dest is not None else None
             instrs.append(IRCallIndirect(
                 func_expr=f'digitalWrite({pin_name}_PIN, HIGH)',
-                args=[], dest=temp,
+                args=[], dest=irdest,
             ))
-            return temp, instrs
+            return _void(), instrs
         elif method == 'low':
-            temp = dest or self.builder.new_temp('call', 'int')
+            irdest = dest if dest is not None else None
             instrs.append(IRCallIndirect(
                 func_expr=f'digitalWrite({pin_name}_PIN, LOW)',
-                args=[], dest=temp,
+                args=[], dest=irdest,
             ))
-            return temp, instrs
+            return _void(), instrs
         elif method == 'toggle':
-            temp = dest or self.builder.new_temp('call', 'int')
+            irdest = dest if dest is not None else None
             instrs.append(IRCallIndirect(
                 func_expr=f'digitalWrite({pin_name}_PIN, !digitalRead({pin_name}_PIN))',
-                args=[], dest=temp,
+                args=[], dest=irdest,
             ))
-            return temp, instrs
+            return _void(), instrs
         elif method == 'read':
             if pin_dir == 'analog':
                 temp = dest or self.builder.new_temp('call', 'int')
@@ -1606,56 +1645,64 @@ class IRLowering:
                 instrs.extend(ai)
             if pin_dir == 'pwm' and pin_name in self._pwm_pins:
                 ch = self._pwm_pins[pin_name]['channel']
-                temp = dest or self.builder.new_temp('call', 'int')
-                instrs.append(IRCall('ledcWrite', [_cv(ch, 'uint8_t')] + arg_vals, dest=temp))
-                return temp, instrs
+                irdest = dest if dest is not None else None
+                instrs.append(IRCall('ledcWrite', [_cv(ch, 'uint8_t')] + arg_vals, dest=irdest))
+                return _void(), instrs
             elif pin_dir == 'analog':
-                # analogWrite is not available on ESP32; use ledc for PWM-capable pins
-                temp = dest or self.builder.new_temp('call', 'int')
+                irdest = dest if dest is not None else None
                 instrs.append(IRCallIndirect(
                     func_expr=f'dacWrite({pin_name}_PIN, {arg_vals[0].name if arg_vals else "0"})',
-                    args=arg_vals, dest=temp,
+                    args=arg_vals, dest=irdest,
                 ))
-                return temp, instrs
+                return _void(), instrs
             else:
-                temp = dest or self.builder.new_temp('call', 'int')
-                instrs.append(IRCall('digitalWrite', [
-                    _cv(pin_name + '_PIN', 'uint8_t'),
-                    arg_vals[0] if arg_vals else _cv(0, 'int'),
-                ], dest=temp))
-                return temp, instrs
+                # Digital output: analogWrite for ranged, digitalWrite for boolean
+                if args and not self._is_trivial_boolean(args[0]):
+                    irdest = dest if dest is not None else None
+                    instrs.append(IRCall('analogWrite', [
+                        _cv(pin_name + '_PIN', 'uint8_t'),
+                        arg_vals[0] if arg_vals else _cv(0, 'int'),
+                    ], dest=irdest))
+                else:
+                    irdest = dest if dest is not None else None
+                    instrs.append(IRCall('digitalWrite', [
+                        _cv(pin_name + '_PIN', 'uint8_t'),
+                        arg_vals[0] if arg_vals else _cv(0, 'int'),
+                    ], dest=irdest))
+                return _void(), instrs
 
         # Fallback for unknown methods
         temp = dest or self.builder.new_temp('call', 'int')
+        irdest = dest if dest is not None else None
         instrs.append(IRCallIndirect(
             func_expr=f'{pin_name}.{method}()',
-            args=[], dest=temp,
+            args=[], dest=irdest,
         ))
         return temp, instrs
 
     def _lower_wifi_method(self, wifi_name: str, method: str, args: List, dest: Optional[IRValue] = None) -> Tuple[IRValue, List]:
         """Lower a WiFi method call (e.g., scanner.scan()) to correct C function calls."""
         instrs = []
-        temp = dest or self.builder.new_temp('call', 'int')
+        irdest = dest if dest is not None else None
 
         if method == 'scan':
             instrs.append(IRCallIndirect(
                 func_expr=f'_iotift_wifi_{wifi_name}_scan_start()',
-                args=[], dest=temp,
+                args=[], dest=irdest,
             ))
         elif method == 'disconnect':
             instrs.append(IRCallIndirect(
                 func_expr=f'_iotift_wifi_{wifi_name}_disconnect()',
-                args=[], dest=temp,
+                args=[], dest=irdest,
             ))
         else:
             # Fallback
             instrs.append(IRCallIndirect(
                 func_expr=f'{wifi_name}.{method}()',
-                args=[], dest=temp,
+                args=[], dest=irdest,
             ))
 
-        return temp, instrs
+        return _void(), instrs
 
     def _is_truthy(self, value_node: Any) -> bool:
         """Check if a value node represents a truthy constant."""
@@ -1666,6 +1713,18 @@ class IRLowering:
                 return int(value_node.value) != 0
         if isinstance(value_node, UnaryOp) and value_node.op == '!':
             return not self._is_truthy(value_node.operand)
+        return False
+
+    def _is_trivial_boolean(self, value_node: Any) -> bool:
+        """Check if a value node is a trivial boolean (0, 1, true, false)."""
+        if isinstance(value_node, Literal):
+            if value_node.vtype == 'bool':
+                return True
+            if value_node.vtype == 'int':
+                return int(value_node.value) in (0, 1)
+            return False
+        if isinstance(value_node, UnaryOp) and value_node.op == '!':
+            return self._is_trivial_boolean(value_node.operand)
         return False
 
     def _body_has_assign_after(self, nodes: List[Node]) -> bool:

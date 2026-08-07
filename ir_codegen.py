@@ -475,6 +475,9 @@ class IRCodeGen:
                             temp_vars[val.name] = val
 
         for tv in sorted(temp_vars.values(), key=lambda v: v.name):
+            # Skip void-typed temps (e.g., from void function calls used as statements)
+            if tv.ctype == 'void':
+                continue
             self._lines.append(f'  {tv.ctype} {tv.name};')
 
         # Emit declared locals
@@ -799,12 +802,14 @@ class IRCodeGen:
     def _emit_cfg_else_chain(self, label, labels, succ, pred, order, back_edges,
                              emitted, indent, loop_headers=None,
                              no_inline_targets=None, jump_targets=None,
-                             merge_target=None):
+                             merge_target=None, skip_else=False):
         """Emit the 'else if' chain from a branch point.
 
         Args:
             merge_target: The end label (merge point) that all elif/else body IRJumps
                           target. This is blocked from inlining inside the bodies.
+            skip_else: If True, we are already inside an else block from a parent
+                       elif with body_instrs; don't emit another else wrapper.
         """
         if loop_headers is None:
             loop_headers = set()
@@ -821,18 +826,13 @@ class IRCodeGen:
         term = bb.terminator
         indent_str = '  ' * indent
 
-        # Emit body instructions (condition computation for elif)
+        # Collect body instructions (condition computation for elif).
         body_instrs = []
         for instr in bb.instructions:
             if isinstance(instr, (IRBranch, IRJump, IRReturn)):
                 term = instr
                 break
             body_instrs.append(instr)
-
-        for instr in body_instrs:
-            c_line = self._instr_c(instr)
-            if c_line:
-                self._lines.append(f'{indent_str}{c_line}')
 
         if isinstance(term, IRBranch):
             cond = self._value_c(term.cond)
@@ -846,9 +846,6 @@ class IRCodeGen:
             false_is_branch = (false_path and isinstance(false_path.terminator, IRBranch))
             false_is_jump = (false_path and isinstance(false_path.terminator, IRJump))
 
-            self._lines.append(f'{indent_str}else if ({cond}) {{')
-            # Block both the false_label (next elif/else) and the merge target (end)
-            # from being inlined inside this elif body.
             elif_jump_target = None
             if true_is_jump:
                 elif_jump_target = true_path.terminator.label
@@ -857,51 +854,125 @@ class IRCodeGen:
                 blocked_targets = blocked_targets | {elif_jump_target}
             if merge_target:
                 blocked_targets = blocked_targets | {merge_target}
-            self._emit_cfg_region(true_label, labels, succ, pred,
-                                 order, back_edges, emitted, indent + 1,
-                                 loop_headers,
-                                 no_inline_targets=blocked_targets,
-                                 jump_targets=jump_targets)
-            self._lines.append(f'{indent_str}}}')
 
-            if false_label not in emitted:
-                if false_is_branch:
-                    # More elifs: continue chain (no extra 'else' - next handler adds it)
-                    self._emit_cfg_else_chain(false_label, labels, succ, pred,
-                                              order, back_edges, emitted, indent,
-                                              loop_headers, no_inline_targets, jump_targets,
-                                              merge_target=merge_target)
-                elif false_is_jump:
+            if body_instrs:
+                # Condition computation exists — wrap in else block
+                if not skip_else:
                     self._lines.append(f'{indent_str}else {{')
-                    # Block merge_target from inlining inside the else body
-                    else_blocked = no_inline_targets
-                    if merge_target:
-                        else_blocked = else_blocked | {merge_target}
-                    self._emit_cfg_region(false_label, labels, succ, pred,
-                                         order, back_edges, emitted, indent + 1,
-                                         loop_headers, else_blocked, jump_targets)
+                    inner = indent + 1
+                else:
+                    inner = indent
+                inner_str = '  ' * inner
+
+                for instr in body_instrs:
+                    c_line = self._instr_c(instr)
+                    if c_line:
+                        self._lines.append(f'{inner_str}{c_line}')
+
+                body_indent = inner + 1
+                self._lines.append(f'{inner_str}if ({cond}) {{')
+                self._emit_cfg_region(true_label, labels, succ, pred,
+                                     order, back_edges, emitted, body_indent,
+                                     loop_headers,
+                                     no_inline_targets=blocked_targets,
+                                     jump_targets=jump_targets)
+                self._lines.append(f'{inner_str}}}')
+
+                # Handle else branch: recurse with skip_else=True since we're inside else
+                if false_label not in emitted:
+                    if false_is_branch or false_is_jump:
+                        self._lines.append(f'{inner_str}else {{')
+                        if false_is_branch:
+                            self._emit_cfg_else_chain(false_label, labels, succ, pred,
+                                                      order, back_edges, emitted, inner + 1,
+                                                      loop_headers, no_inline_targets, jump_targets,
+                                                      merge_target=merge_target, skip_else=True)
+                        else:
+                            else_blocked = no_inline_targets
+                            if merge_target:
+                                else_blocked = else_blocked | {merge_target}
+                            self._emit_cfg_region(false_label, labels, succ, pred,
+                                                 order, back_edges, emitted, inner + 1,
+                                                 loop_headers, else_blocked, jump_targets)
+                        self._lines.append(f'{inner_str}}}')
+
+                if not skip_else:
                     self._lines.append(f'{indent_str}}}')
+            elif skip_else:
+                # Inside else block already, no body_instrs — emit plain if
+                self._lines.append(f'{indent_str}if ({cond}) {{')
+                self._emit_cfg_region(true_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent + 1,
+                                     loop_headers,
+                                     no_inline_targets=blocked_targets,
+                                     jump_targets=jump_targets)
+                self._lines.append(f'{indent_str}}}')
+
+                if false_label not in emitted:
+                    if false_is_branch or false_is_jump:
+                        self._lines.append(f'{indent_str}else {{')
+                        if false_is_branch:
+                            self._emit_cfg_else_chain(false_label, labels, succ, pred,
+                                                      order, back_edges, emitted, indent + 1,
+                                                      loop_headers, no_inline_targets, jump_targets,
+                                                      merge_target=merge_target, skip_else=True)
+                        else:
+                            else_blocked = no_inline_targets
+                            if merge_target:
+                                else_blocked = else_blocked | {merge_target}
+                            self._emit_cfg_region(false_label, labels, succ, pred,
+                                                 order, back_edges, emitted, indent + 1,
+                                                 loop_headers, else_blocked, jump_targets)
+                        self._lines.append(f'{indent_str}}}')
+            else:
+                # No body_instrs, not skipped — clean else if
+                self._lines.append(f'{indent_str}else if ({cond}) {{')
+                self._emit_cfg_region(true_label, labels, succ, pred,
+                                     order, back_edges, emitted, indent + 1,
+                                     loop_headers,
+                                     no_inline_targets=blocked_targets,
+                                     jump_targets=jump_targets)
+                self._lines.append(f'{indent_str}}}')
+
+                if false_label not in emitted:
+                    if false_is_branch:
+                        self._emit_cfg_else_chain(false_label, labels, succ, pred,
+                                                  order, back_edges, emitted, indent,
+                                                  loop_headers, no_inline_targets, jump_targets,
+                                                  merge_target=merge_target)
+                    elif false_is_jump:
+                        self._lines.append(f'{indent_str}else {{')
+                        else_blocked = no_inline_targets
+                        if merge_target:
+                            else_blocked = else_blocked | {merge_target}
+                        self._emit_cfg_region(false_label, labels, succ, pred,
+                                             order, back_edges, emitted, indent + 1,
+                                             loop_headers, else_blocked, jump_targets)
+                        self._lines.append(f'{indent_str}}}')
             return
 
         if isinstance(term, IRJump):
             target = term.label
             is_back_edge = (label, target) in back_edges or target in loop_headers
             if not is_back_edge and target not in no_inline_targets and target not in emitted:
-                self._lines.append(f'{indent_str}else {{')
-                # Block merge_target from inlining inside the else body
+                if not skip_else:
+                    self._lines.append(f'{indent_str}else {{')
                 else_blocked = no_inline_targets
                 if merge_target:
                     else_blocked = else_blocked | {merge_target}
                 self._emit_cfg_region(target, labels, succ, pred,
                                      order, back_edges, emitted, indent + 1,
                                      loop_headers, else_blocked, jump_targets)
-                self._lines.append(f'{indent_str}}}')
+                if not skip_else:
+                    self._lines.append(f'{indent_str}}}')
             return
 
         if isinstance(term, IRReturn):
-            self._lines.append(f'{indent_str}else {{')
+            if not skip_else:
+                self._lines.append(f'{indent_str}else {{')
             self._lines.append(f'{indent_str}  {self._instr_c(term)}')
-            self._lines.append(f'{indent_str}}}')
+            if not skip_else:
+                self._lines.append(f'{indent_str}}}')
             return
 
     def _reaches(self, start, target, labels, succ, back_edges, visited):

@@ -1055,3 +1055,135 @@ tick { }
 """)
         # Should have Color_RED (generated enum value) or similar
         assert 'Color' in c
+
+
+# ═══════════════════════════════════════════════════════════════
+#  REGRESSION TESTS — Codegen Bug Fixes
+# ═══════════════════════════════════════════════════════════════
+
+class TestCodegenBugs:
+    """Verify three codegen bugs are fixed."""
+
+    # ── Bug 1: if/elif/else chain ──────────────────────────
+
+    def test_elif_chain_valid_c(self):
+        """if/elif/else chain must not have statements between } and else."""
+        c = compile_ir("""
+pin LED = output 13;
+int x = 0;
+every 1000 {
+    x = x + 1;
+    if (x == 1) {
+        LED = 1;
+    } else if (x == 2) {
+        LED = 0;
+    } else if (x == 3) {
+        LED = 1;
+    } else {
+        LED = 0;
+    }
+}
+""")
+        # Verify the elif chain structure: no orphan statements between } and else
+        lines = c.split('\n')
+        in_body = False
+        prev_was_close_brace = False
+        for line in lines:
+            stripped = line.strip()
+            if 'static void _iotift_every' in line:
+                in_body = True
+                continue
+            if not in_body:
+                continue
+            if stripped == '}':
+                in_body = False
+                break
+            # After a closing brace, only 'else', 'else if', 'else {', or another '}' is valid
+            if prev_was_close_brace:
+                assert stripped.startswith('else') or stripped == '}' or stripped == '', \
+                    f"Invalid statement after closing brace: {stripped}"
+            prev_was_close_brace = stripped == '}'
+        # Verify all three branches exist
+        assert 'digitalWrite(LED_PIN, HIGH)' in c
+        assert 'digitalWrite(LED_PIN, LOW)' in c
+
+
+    # ── Bug 2: analogWrite for ranged values ──────────────
+
+    def test_analogwrite_for_ranged_int(self):
+        """Writing a non-boolean int to output pin emits analogWrite."""
+        c = compile_ir("""
+pin LED = output 13;
+int x = 0;
+every 1000 {
+    x = x + 1;
+    LED = x * 50;
+}
+""")
+        assert 'analogWrite(LED_PIN,' in c, \
+            f"Expected analogWrite for ranged int, got:\n{c}"
+        assert 'digitalWrite(LED_PIN' not in c, \
+            f"Should not emit digitalWrite for ranged int"
+
+    def test_analogwrite_for_float_clamp_lerp(self):
+        """Writing a clamp(lerp(...)) float to output pin emits analogWrite."""
+        c = compile_ir("""
+pin LED = output 13;
+float x = 0.0;
+fn lerp(float a, float b, float t_) -> float {
+    return a + (b - a) * t_;
+}
+fn clamp_f(float val, float lo, float hi) -> float {
+    if (val < lo) { return lo; }
+    if (val > hi) { return hi; }
+    return val;
+}
+every 1000 {
+    x = x + 0.1;
+    float scaled = lerp(0.0, 255.0, x * 0.01);
+    float clamped = clamp_f(scaled, 0.0, 255.0);
+    LED.write(clamped);
+}
+""")
+        assert 'analogWrite' in c, \
+            f"Expected analogWrite for float clamp/lerp value, got:\n{c}"
+        # digitalWrite should only appear in user function definitions, not for LED
+        # Check the handler specifically
+        assert 'analogWrite(LED_PIN' in c
+
+    def test_digitalwrite_still_used_for_boolean(self):
+        """Writing 0/1 to digital pin still uses digitalWrite."""
+        c = compile_ir("""
+pin LED = output 13;
+every 1000 {
+    LED = 1;
+    LED = 0;
+}
+""")
+        # Should use digitalWrite for boolean values
+        assert 'digitalWrite(LED_PIN, HIGH)' in c
+        assert 'digitalWrite(LED_PIN, LOW)' in c
+        assert 'analogWrite' not in c
+
+    # ── Bug 3: Serial.print raw expressions ────────────────
+
+    def test_print_evaluates_expression(self):
+        """Serial.print with interpolation must evaluate, not stringify."""
+        c = compile_ir("""
+int x = 5;
+every 1000 {
+    println("result={x + x}");
+}
+""")
+        # The expression x + x must NOT appear as a string literal
+        assert '"(x + x)"' not in c, \
+            "Expression should not be emitted as string literal"
+        # It should appear as a C expression (without surrounding quotes)
+        assert 'x + x' in c
+        # Verify it's not inside quotes
+        lines = c.split('\n')
+        for line in lines:
+            if 'x + x' in line and 'Serial.print' in line:
+                # Must not have quotes around x + x
+                assert '"(x + x)"' not in line, \
+                    f"Expression stringified: {line.strip()}"

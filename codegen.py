@@ -946,15 +946,15 @@ class CodeGen:
         # ── Assign ────────────────────────────
         if isinstance(node, Assign):
             target = self._target_c(node.target)
-
-            # Digital-write short-cut for output pins.
+            # Pin-write short-cut for output pins.
             if isinstance(node.target, str) and node.target in self._pins \
                     and node.target not in self._pwm_pins:
                 val = self._expr_c(node.value)
                 if val in ('0', '1', 'true', 'false'):
                     level = 'HIGH' if val in ('1', 'true') else 'LOW'
                     return f'digitalWrite({node.target}_PIN, {level});'
-                return f'digitalWrite({node.target}_PIN, ({val}) ? HIGH : LOW);'
+                # Ranged value → use analogWrite
+                return f'analogWrite({node.target}_PIN, {val});'
 
             return f'{target} = {self._expr_c(node.value)};'
 
@@ -1359,7 +1359,11 @@ class CodeGen:
             elif pin_dir == 'analog':
                 return f'dacWrite({pin_name}_PIN, {arg_str})'
             else:
-                return f'digitalWrite({pin_name}_PIN, ({arg_str}) ? HIGH : LOW)'
+                if arg_str in ('0', '1', 'true', 'false'):
+                    level = 'HIGH' if arg_str in ('1', 'true') else 'LOW'
+                    return f'digitalWrite({pin_name}_PIN, {level});'
+                # Ranged value → use analogWrite
+                return f'analogWrite({pin_name}_PIN, {arg_str});'
         elif method == 'setup':
             freq = self._expr_c(args[0]) if args else '5000'
             res = self._expr_c(args[1]) if len(args) > 1 else '8'
