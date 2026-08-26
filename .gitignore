@@ -30,6 +30,7 @@ generated/
 
 # Scratch / backup area
 nothing/
+defunct/
 
 # VS Code extension build artifacts
 vscode-extension/node_modules/
