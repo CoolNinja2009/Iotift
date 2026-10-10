@@ -14,7 +14,7 @@ pin LED_WIFI   = output 12;
 pin LED_ALERT  = output 14;
 pin TEMP_IN    = analog 36;
 pin HUMID_IN   = analog 39;
-pin BTN_MODE   = input 5 { pull: up, debounce: 50ms };
+pin BTN_MODE   = input 19 { pull: up, debounce: 50ms };  // was GPIO 5, which COOLER also used
 pin BTN_RESET  = input 18 { pull: up, debounce: 30ms };
 
 // ── Constants ───────────────────────────────────────────────────────
@@ -245,12 +245,14 @@ on BTN_RESET.press {
 
 // ── Temperature Alerts ──────────────────────────────────────────────
 
-on TEMP_IN > 35.0 {
+// Threshold events compare the raw ADC reading (0-4095), not degrees.
+// 35 C ≈ 35 / 100 * 4095 / 3.3 ≈ 434 counts;  5 C ≈ 62 counts.
+on TEMP_IN > 434 {
     println("HIGH TEMPERATURE ALERT: {current_temp} C");
     alert_level = ALERT_CRITICAL;
 }
 
-on TEMP_IN < 5.0 {
+on TEMP_IN < 62 {
     println("LOW TEMPERATURE ALERT: {current_temp} C");
     alert_level = ALERT_CRITICAL;
 }

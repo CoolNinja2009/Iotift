@@ -19,11 +19,18 @@ build/
 .DS_Store
 Thumbs.db
 
-# Iotift — generated C output
+# Iotift — generated C/C++ output
 *.c
+*.cpp
 *.h
 *.bin
 generated/
+
+# ...but the test simulator's C++ sources are real source files
+!tests/sim/*.cpp
+!tests/sim/*.h
+!tests/sim/driver/
+!tests/sim/driver/*.h
 
 # Generated PlatformIO projects
 *_project/

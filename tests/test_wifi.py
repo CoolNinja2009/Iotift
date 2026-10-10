@@ -576,7 +576,7 @@ def test_codegen_wifi_nvs_guard_shared():
     """Multiple WiFi declarations share init guard."""
     c = _generate('''
     wifi sta_if { ssid: "a", password: "pass" };
-    wifi ap_if { mode: ap, ssid: "b", password: "pass2" };
+    wifi ap_if { mode: ap, ssid: "b", password: "password2" };
     ''')
     assert '_iotift_wifi_system_initialized' in c
 

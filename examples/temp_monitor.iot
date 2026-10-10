@@ -26,11 +26,13 @@ every 1000 {
     }
 }
 
-on TEMP > 40.0 {
+// Threshold events compare the raw ADC reading (0-4095), not degrees.
+// 40 C ≈ 40 / 100 * 4095 / 3.3 ≈ 496 counts;  25 C ≈ 310 counts.
+on TEMP > 496 {
     println("WARNING: Overheating! {current_temp} C");
     LED_R.high();
 }
 
-on TEMP < 25.0 {
+on TEMP < 310 {
     println("Temperature stable at {current_temp} C");
 }

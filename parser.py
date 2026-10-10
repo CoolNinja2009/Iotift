@@ -72,6 +72,11 @@ class Parser:
             )
         return self._advance()
 
+    def _mark_end(self, node: Any) -> None:
+        """Record the line of the last token of *node* (its closing `}` for blocks)."""
+        if isinstance(node, Node) and self._pos > 0 and not node.end_line:
+            node.end_line = self._tokens[self._pos - 1].line
+
     def _expect_semi(self) -> Token:
         return self._expect(TT.SEMICOLON)
 
@@ -145,6 +150,7 @@ class Parser:
             try:
                 node = self._parse_top_level()
                 if node is not None:
+                    self._mark_end(node)
                     prog.body.append(node)
             except ParseError as e:
                 self._error(str(e))
@@ -275,17 +281,21 @@ class Parser:
         else:
             direction = self._expect(TT.KEYWORD).value
 
-        number = self._expect(TT.INT_LIT).value
+        # GPIO number, or an Arduino pin name such as A0
+        if self._check(TT.IDENT):
+            number = self._advance().value
+        else:
+            number = self._expect(TT.INT_LIT).value
 
         # Optional PWM config: freq N resolution N
         pwm_freq = None
         pwm_resolution = None
         if direction == 'pwm':
             self.pwm_pins.add(name)
-            if self._check(TT.KEYWORD, 'freq'):
+            if self._peek().value == 'freq' and self._peek().type in (TT.KEYWORD, TT.IDENT):
                 self._advance()
                 pwm_freq = self._expect(TT.INT_LIT).value
-            if self._check(TT.KEYWORD, 'resolution'):
+            if self._peek().value == 'resolution' and self._peek().type in (TT.KEYWORD, TT.IDENT):
                 self._advance()
                 pwm_resolution = self._expect(TT.INT_LIT).value
 
@@ -500,7 +510,7 @@ class Parser:
         # ── on TEMP > 50.0 { ... }   (threshold style) ──
         if self._check(TT.OP):
             op = self._advance().value
-            value = self._parse_primary()
+            value = self._parse_additive()   # allows `on T < -5.0` / `on T > LIMIT + 2`
             body = self._parse_block()
             return OnThreshold(line=line, pin=target, op=op, value=value, body=body)
 
@@ -662,7 +672,8 @@ class Parser:
                 else:
                     self._advance()  # skip unknown
 
-            if not self._match(TT.COMMA):
+            # options may be separated by `,` or `;`
+            if not (self._match(TT.COMMA) or self._match(TT.SEMICOLON)):
                 break
 
         self._expect(TT.RBRACE)
@@ -738,6 +749,7 @@ class Parser:
             try:
                 s = self._parse_statement()
                 if s is not None:
+                    self._mark_end(s)
                     stmts.append(s)
             except ParseError as e:
                 self._error(str(e))
@@ -776,7 +788,7 @@ class Parser:
             if tok.value == 'start':
                 return self._parse_start()
             if tok.value == 'print':
-                return self._parse_print()
+                return self._parse_print(newline=False)
             if tok.value == 'println':
                 return self._parse_print(newline=True)
             if tok.value == 'defer':
@@ -816,9 +828,7 @@ class Parser:
     def _parse_if(self) -> IfStmt:
         line = self._peek().line
         self._expect(TT.KEYWORD, 'if')
-        self._expect(TT.LPAREN)
-        cond = self._parse_expr()
-        self._expect(TT.RPAREN)
+        cond = self._parse_expr()          # `if (x) {` and `if x {` both work
         then_body = self._parse_block()
         elif_clauses: List[tuple] = []
         else_body: Optional[List[Node]] = None
@@ -827,9 +837,7 @@ class Parser:
             self._advance()
             if self._check(TT.KEYWORD, 'if'):
                 self._advance()
-                self._expect(TT.LPAREN)
                 ec = self._parse_expr()
-                self._expect(TT.RPAREN)
                 eb = self._parse_block()
                 elif_clauses.append((ec, eb))
             else:
@@ -842,16 +850,15 @@ class Parser:
     def _parse_while(self) -> WhileStmt:
         line = self._peek().line
         self._expect(TT.KEYWORD, 'while')
-        self._expect(TT.LPAREN)
-        cond = self._parse_expr()
-        self._expect(TT.RPAREN)
+        cond = self._parse_expr()          # parentheses optional
         body = self._parse_block()
         return WhileStmt(line=line, condition=cond, body=body)
 
     def _parse_for(self) -> ForStmt:
         line = self._peek().line
         self._expect(TT.KEYWORD, 'for')
-        self._expect(TT.LPAREN)
+        # `for (init; cond; step) {` or `for init; cond; step {`
+        parens = bool(self._match(TT.LPAREN))
 
         # ── init clause ──
         init: Optional[Node] = None
@@ -876,10 +883,11 @@ class Parser:
 
         # ── step clause ──
         step = None
-        if not self._check(TT.RPAREN):
+        if not self._check(TT.RPAREN if parens else TT.LBRACE):
             step = self._parse_assign_or_call(consume_semi=False)
 
-        self._expect(TT.RPAREN)
+        if parens:
+            self._expect(TT.RPAREN)
         body = self._parse_block()
         return ForStmt(line=line, init=init, condition=cond, step=step, body=body)
 
@@ -1043,21 +1051,38 @@ class Parser:
     def _parse_expr(self) -> Any:
         return self._parse_logical()
 
+    # Binary operator levels, loosest first — the same precedence as C, so an
+    # expression means what it would mean if pasted into C.
+    # (Previously && and || shared one level, so `a || b && c` parsed as
+    # `(a || b) && c`.)
+    _BINARY_LEVELS = (
+        ('||',),
+        ('&&',),
+        ('|',),
+        ('^',),
+        ('&',),
+        ('==', '!='),
+        ('<', '>', '<=', '>='),
+        ('<<', '>>'),
+    )
+
     def _parse_logical(self) -> Any:
-        left = self._parse_comparison()
-        while self._check(TT.OP) and self._peek().value in ('&&', '||'):
-            op = self._advance().value
-            right = self._parse_comparison()
-            left = BinOp(left=left, op=op, right=right)
+        return self._parse_binary_level(0)
+
+    def _parse_binary_level(self, level: int) -> Any:
+        if level >= len(self._BINARY_LEVELS):
+            return self._parse_additive()
+        ops = self._BINARY_LEVELS[level]
+        left = self._parse_binary_level(level + 1)
+        while self._check(TT.OP) and self._peek().value in ops:
+            tok = self._advance()
+            right = self._parse_binary_level(level + 1)
+            left = BinOp(left=left, op=tok.value, right=right, line=tok.line)
         return left
 
     def _parse_comparison(self) -> Any:
-        left = self._parse_additive()
-        while self._check(TT.OP) and self._peek().value in ('==', '!=', '<', '>', '<=', '>='):
-            op = self._advance().value
-            right = self._parse_additive()
-            left = BinOp(left=left, op=op, right=right)
-        return left
+        """Kept for callers that want a comparison-level expression."""
+        return self._parse_binary_level(5)
 
     def _parse_additive(self) -> Any:
         left = self._parse_multiplicative()
@@ -1076,10 +1101,10 @@ class Parser:
         return left
 
     def _parse_unary(self) -> Any:
-        if self._check(TT.OP) and self._peek().value in ('!', '-'):
-            op = self._advance().value
+        if self._check(TT.OP) and self._peek().value in ('!', '-', '~'):
+            tok = self._advance()
             operand = self._parse_unary()
-            return UnaryOp(op=op, operand=operand)
+            return UnaryOp(op=tok.value, operand=operand, line=tok.line)
         return self._parse_cast()
 
     def _parse_cast(self) -> Any:
@@ -1197,12 +1222,19 @@ class Parser:
         self._expect(TT.LPAREN)
         params: List[VarDecl] = []
         while not self._check(TT.RPAREN):
-            vtype = self._consume_type()
-            tok = self._peek()
-            if tok.type in (TT.IDENT, TT.KEYWORD):
+            if self._check(TT.IDENT) and self._peek(1).type == TT.COLON:
+                # `name: type`
                 name = self._advance().value
+                self._advance()
+                vtype = self._consume_type()
             else:
-                name = self._expect(TT.IDENT).value  # raises ParseError
+                # `type name`
+                vtype = self._consume_type()
+                tok = self._peek()
+                if tok.type in (TT.IDENT, TT.KEYWORD):
+                    name = self._advance().value
+                else:
+                    name = self._expect(TT.IDENT).value  # raises ParseError
             params.append(VarDecl(vtype=vtype, name=name))
             if not self._match(TT.COMMA):
                 break

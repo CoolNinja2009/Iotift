@@ -246,7 +246,7 @@ class VoidLoop(Node):
 @dataclass
 class TickBlock(Node):
     """
-    tick { ... }  —  run on each main loop iteration.
+    tick { ... }  —  run once at startup, after all other setup.
     Replaces the deprecated `void loop()`.
     """
     body: List[Node] = field(default_factory=list)

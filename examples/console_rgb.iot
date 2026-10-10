@@ -88,7 +88,7 @@ on BTN.press {
         STATUS = 1;
         STATUS = 0 after 100;
         print("→ Mode: ");
-        print(mode);
+        println(mode);
     }
 }
 
@@ -96,7 +96,7 @@ on BTN.press {
 
 every 50 as debounce_timer {
     btn_debounce = 0;
-    stop debounce_timer;
+    // (no `stop` here: stopping made the button work only once)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -333,5 +333,4 @@ STATUS = 0 after 300;
 STATUS = 1 after 600;
 STATUS = 0 after 900;
 
-print("Console RGB ready.");
-print("ESP32 free heap: ");
+println("Console RGB ready.");

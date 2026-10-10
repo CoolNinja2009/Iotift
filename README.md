@@ -52,7 +52,7 @@ on TEMP > 50.0 {           // event: temperature threshold
 
 ```bash
 # Compile to a C file
-python iotift.py blink.iot -o blink.c
+python iotift.py blink.iot -o blink.cpp
 
 # Or generate a PlatformIO project and flash directly
 python iotift.py blink.iot --flash
@@ -217,7 +217,7 @@ python iotift.py blink.iot --flash
 Or just generate the C code:
 
 ```bash
-python iotift.py blink.iot -o blink.c
+python iotift.py blink.iot -o blink.cpp
 ```
 
 ---
@@ -411,14 +411,15 @@ while true {
 
 #### on — Pin Event
 
-Triggers when a digital pin changes state. Compiles to an interrupt handler.
+Triggers when a digital pin changes state (after debouncing). The handler runs from `loop()`,
+so it may print, call functions and use any variable.
 
 ```iot
-on BTN.press {              // rising edge
+on BTN.press {              // pressed (HIGH → LOW with the default pull-up)
     LED = 1;
 }
 
-on BTN.release {            // falling edge
+on BTN.release {            // released
     LED = 0;
 }
 
@@ -427,20 +428,21 @@ on BTN.change {             // any edge
 }
 ```
 
-| Event | Interrupt Mode | Trigger |
-|-------|---------------|---------|
-| `.press` | `FALLING` | Button pressed (HIGH → LOW, assumes pull-up) |
-| `.release` | `RISING` | Button released (LOW → HIGH) |
-| `.rising` | `RISING` | Rising edge |
-| `.falling` | `FALLING` | Falling edge |
-| `.change` | `CHANGE` | Any edge |
+| Event | Trigger |
+|-------|---------|
+| `.press` | Button pressed: HIGH → LOW with `pull: up` (the default), LOW → HIGH with `pull: down` |
+| `.release` | The opposite edge of `.press` |
+| `.rising` / `.high` | LOW → HIGH |
+| `.falling` / `.low` | HIGH → LOW |
+| `.change` | Any edge |
 
-> 🔌 **Since Milestone 3:** `on PIN.event` compiles to a **real hardware interrupt**
-> via `attachInterrupt()`. The ISR is minimal (sets a `volatile bool` flag) and the
-> user body runs in `loop()` — safe, predictable, and non-blocking.
-> 
-> Debounce is configured in the pin declaration and applied in the handler
-> (never in the ISR):
+Any number of events can be attached to the same pin.
+
+> The pin is sampled from `loop()` and debounced: an edge is reported once the
+> new level has been stable for the debounce time (`debounce:` in the pin
+> config; 25 ms by default for inputs). Pulses shorter than one `loop()`
+> iteration can be missed — for those, write an `isr fn` and attach it in a
+> `c setup { }` block.
 > ```iot
 > pin BTN = input 5 { pull: up, debounce: 50ms };
 > on BTN.press { LED = 1; }   // debounced button press
@@ -448,7 +450,9 @@ on BTN.change {             // any edge
 
 #### on — Threshold Event
 
-Monitors an analog pin and triggers when a threshold is crossed.
+Monitors a pin and runs the block **once each time the condition becomes true**
+(it re-arms when the condition becomes false again). The value compared is the
+raw reading: `analogRead()` (0–4095 on ESP32) for analog pins, 0/1 for digital ones.
 
 ```iot
 on TEMP > 50.0 {
@@ -700,7 +704,7 @@ Declare two separate wifi blocks — the compiler auto-merges into `WIFI_MODE_AP
 
 ```iot
 wifi sta_if { ssid: "HomeWiFi"; password: "pass"; }
-wifi ap_if  { mode: ap; ssid: "IotiftAP"; password: "ap123"; }
+wifi ap_if  { mode: ap; ssid: "IotiftAP"; password: "ap123456"; }
 ```
 
 #### Properties (Read-Only State)
@@ -792,7 +796,16 @@ print(temp);
 print("Temperature: " + temp);
 ```
 
-Generates `Serial.println(...)` on ESP32.
+`print` writes without a newline, `println` ends the line. Inside a string,
+`{expression}` is replaced by its value (`{{` and `}}` give literal braces), and
+`+` between a string and a value prints the parts one after another:
+
+```iot
+println("T = {temp} C, fan {fan_on}");   // bools print as true/false
+println("Temperature: " + temp);          // same as "Temperature: {temp}"
+```
+
+`+` on strings only works inside `print`/`println` — there are no heap strings.
 
 ### Time Literals
 
@@ -1052,9 +1065,11 @@ every 500 as blinker {
     LED = !LED;
 }
 
-// After 10 seconds, stop blinking and leave LED on
-LED = 1 after 10000;
-stop blinker after 10000;
+// After 10 seconds, stop blinking and leave the LED on
+after 10s {
+    stop blinker;
+    LED = 1;
+}
 ```
 
 ---
@@ -1066,7 +1081,7 @@ iotift <command> [options]
 
 Commands:
   check   <file.iot>              Type-check only, no code generation
-  build   <file.iot> [-o out.c]   Compile to C (default command)
+  build   <file.iot> [-o out.cpp] Compile to C++ (default command)
   flash   <file.iot>              Compile + flash to device
   debug   <file.iot>              Build with debug flags + GDB launch
   fmt     <file.iot> [--check]    Format source file
@@ -1084,11 +1099,11 @@ Legacy: iotift <file.iot> [options]  (equivalent to 'build')
 
 | Flag | Description |
 |------|-------------|
-| `-o`, `--output <file>` | Output C file (default: `<source>.c`) |
+| `-o`, `--output <file>` | Output C++ file (default: `<source>.cpp`) |
 | `--ast` | Dump the AST to stdout (for debugging) |
 | `--ir-dump` | Dump the IR to stdout (implies `--no-optimize`) |
-| `--direct-codegen` | Use direct AST→C codegen (skip IR pipeline) |
-| `--no-optimize` | Skip IR optimization passes |
+| `--ir-pipeline` | Use the experimental IR pipeline instead of the default direct codegen |
+| `--no-optimize` | Skip IR optimization passes (IR pipeline only) |
 | `--target`, `--device <target>` | Target device (default: `esp32`) |
 | `--debug` | Emit source maps (`// @iot:line N` comments + `.map.json`) |
 | `--project` | Generate a full PlatformIO project folder |
@@ -1104,8 +1119,8 @@ Legacy: iotift <file.iot> [options]  (equivalent to 'build')
 # Type-check only (no C output)
 iotift check blink.iot
 
-# Basic compilation (uses IR pipeline by default)
-iotift build blink.iot -o blink.c
+# Basic compilation
+iotift build blink.iot -o blink.cpp
 
 # Target a specific MCU
 iotift build blink.iot --target stm32
@@ -1265,9 +1280,12 @@ npm run compile
    code generation, enabling optimization passes like constant folding, dead code
    elimination, and redundant store elimination before final C emission.
 
-3. **IR pipeline is default.** Compilation goes through the full IR pipeline
-   (AST → IR → optimize → C). The original AST→C codegen is preserved behind
-   `--direct-codegen` for backward compatibility.
+3. **Direct codegen is default.** `codegen.py` turns the AST straight into
+   structured C++ (`if`/`while`/`for`, not gotos) and leaves optimisation to
+   the C++ compiler. Every construct either compiles to working code or is a
+   compile error — never a comment or a silently dropped statement. The IR
+   pipeline (AST → IR → optimize → C) is still available behind
+   `--ir-pipeline` but is experimental (see `spec/bugs.txt`).
 
 4. **HAL abstraction.** Device-specific differences (`millis()`, pin constants,
    PWM APIs) live in the `hal/` package. Adding a new target
@@ -1284,9 +1302,9 @@ npm run compile
    detection sets a flag when all slots are full. Configurable via
    `@config scheduler_slots = N` or `--scheduler-slots N`.
 
-7. **Real interrupts.** `on PIN.event` generates `attachInterrupt()` with a
-   minimal IRAM ISR that sets a `volatile bool` flag. The user body runs
-   safely in `loop()` with optional debounce applied in the handler.
+7. **Everything user-written runs in `loop()`.** Pin events are polled and
+   debounced, WiFi driver callbacks only set flags, and deferred actions run
+   from the scheduler tick — so handlers can safely print and call anything.
 
 8. **AST-level imports.** `import "file.iot"` and `import { Name } from "..."`
    are resolved before semantic analysis by inlining the imported file's AST
@@ -1390,6 +1408,22 @@ Iotift/
 ├── .gitignore
 └── README.md
 ```
+
+---
+
+## 🧪 Testing
+
+```bash
+python -m pytest tests/
+```
+
+`tests/test_runtime.py` is the important one: it compiles the generated C++
+with the host `g++` against a simulated Arduino/ESP32 core (`tests/sim/`) and
+**runs** it — driving buttons, ADC values and WiFi events over simulated time —
+then checks pin changes and Serial output. A change to the compiler that
+produces code which compiles but does the wrong thing fails here. It also
+builds every file in `examples/`. (Skipped automatically if no C++ compiler
+is installed.)
 
 ---
 

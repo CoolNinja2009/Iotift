@@ -457,13 +457,22 @@ def test_c_global_block():
 # ─────────────────────────────────────────
 
 def test_print_stmt():
+    # print stays print (no newline); the formatter must not change meaning.
     source = 'print("hello");\n'
     result = format_source(source)
-    assert 'println("hello")' in result
+    assert 'print("hello")' in result
+    assert 'println' not in result
 
 
 def test_print_expr():
     source = 'print(temp);\n'
+    result = format_source(source)
+    assert 'print(temp)' in result
+    assert 'println' not in result
+
+
+def test_println_stmt():
+    source = 'println(temp);\n'
     result = format_source(source)
     assert 'println(temp)' in result
 
@@ -488,3 +497,60 @@ def test_assign_after():
     source = 'LED = 0 after 200;\n'
     result = format_source(source)
     assert 'LED = 0 after 200ms;' in result
+
+
+# ─────────────────────────────────────────
+#  MEANING & COMMENT PRESERVATION
+#  (the formatter used to drop parentheses, semicolons and every comment)
+# ─────────────────────────────────────────
+
+def test_parentheses_that_matter_are_kept():
+    src = 'float r = 255 - (127.5 + 127.5 * x);\nint y = (a + b) * c;\nint z = a - (b - c);\n'
+    out = format_source(src)
+    assert '255 - (127.5 + 127.5 * x)' in out
+    assert '(a + b) * c' in out
+    assert 'a - (b - c)' in out
+
+
+def test_pwm_calls_keep_semicolons_and_lines():
+    src = 'pin R = pwm 13;\nR.setup(1000, 10);\nevery 10 {\nR.write(1);\nR.write(2);\n}\n'
+    out = format_source(src)
+    assert 'R.setup(1000, 10);' in out
+    assert '    R.write(1);\n    R.write(2);\n' in out
+
+
+def test_comments_are_preserved():
+    src = ('// header\n@device esp32\n\n// the led\npin LED = output 2;  // on board\n'
+           'every 1s {\n    // inside\n    LED.toggle();  // flip\n    /* block\n       comment */\n}\n')
+    out = format_source(src)
+    for c in ('// header', '// the led', '// on board', '// inside', '// flip', '/* block\n       comment */'):
+        assert c in out, c
+    # the comment that was inside the block stays inside it
+    assert out.index('// inside') < out.index('LED.toggle()')
+
+
+def test_arrays_volatile_and_var_round_trip():
+    src = 'float readings[10];\nvolatile int counter = 0;\nvar t = 1.5;\nlet k: u8 = 3;\n'
+    out = format_source(src)
+    assert 'float readings[10];' in out
+    assert 'volatile int counter = 0;' in out
+    assert 'var t = 1.5;' in out
+    assert 'let k: u8 = 3;' in out
+
+
+def test_formatting_is_idempotent_and_safe_on_examples():
+    import glob
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for path in glob.glob(os.path.join(root, 'examples', '*.iot')):
+        with open(path, encoding='utf-8') as f:
+            src = f.read()
+        out = format_source(src)        # raises if meaning or a comment would change
+        assert format_source(out) == out, path
+
+
+def test_formatted_output_parses_with_parenthesised_style_too():
+    # Both `if (x) {` and `if x {` parse; the formatter emits the latter.
+    out = format_source('fn f(int a) -> int {\nif (a > 0) {\nreturn 1;\n}\nfor (int i = 0; i < 3; i += 1) {\na += i;\n}\nreturn a;\n}\n')
+    assert 'fn f(a: int) -> int {' in out
+    assert 'if a > 0 {' in out
+    assert 'for int i = 0; i < 3; i += 1 {' in out

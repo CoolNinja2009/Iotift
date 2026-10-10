@@ -26,7 +26,7 @@ from typing import Optional
 
 from lexer    import tokenize, LexError
 from parser   import Parser, ParseError
-from codegen  import CodeGen, __version__
+from codegen  import CodeGen, CodeGenError, __version__
 from ir_lowering import IRLowering
 from ir_optimizer import IROptimizer
 from ir_codegen import IRCodeGen
@@ -134,10 +134,18 @@ def _parse_source(source: str) -> list:
 
     try:
         parser = Parser(tokens)
-        return parser.parse()
+        program = parser.parse()
     except ParseError as e:
         print(f'Parse error: {e}')
         sys.exit(1)
+    # The parser recovers from errors so it can report several at once, but
+    # the resulting AST is missing whatever failed to parse.  Generating code
+    # from it would silently drop parts of the program.
+    if getattr(parser, '_had_error', False):
+        n = len(getattr(parser, '_errors', [])) or 1
+        print(f'{n} parse error(s); no code generated.', file=sys.stderr)
+        sys.exit(1)
+    return program
 
 
 def _resolve_imports(ast: list, source_path: str) -> list:
@@ -172,7 +180,7 @@ def _semantic_check(ast: list, werror: bool = False,
 
 
 def _generate_c(ast: list, device: str = 'esp32', baud: int = 115200,
-                scheduler_slots: int = 16, direct_codegen: bool = False,
+                scheduler_slots: int = 16, direct_codegen: bool = True,
                 no_optimize: bool = False, ir_dump: bool = False,
                 debug: bool = False, source_path: str = '') -> tuple:
     """
@@ -181,7 +189,11 @@ def _generate_c(ast: list, device: str = 'esp32', baud: int = 115200,
     if direct_codegen:
         gen = CodeGen(device=device, baud_rate=baud,
                       scheduler_slots=scheduler_slots)
-        c_code = gen.generate(ast)
+        try:
+            c_code = gen.generate(ast)
+        except CodeGenError as e:
+            print(f'error: {e}', file=sys.stderr)
+            sys.exit(1)
         device_name = gen._device
         source_map = None
     else:
@@ -327,7 +339,7 @@ def cmd_build(args) -> None:
         device=args.target or args.device,
         baud=args.baud,
         scheduler_slots=args.scheduler_slots,
-        direct_codegen=args.direct_codegen,
+        direct_codegen=not getattr(args, 'ir_pipeline', False),
         no_optimize=args.no_optimize,
         ir_dump=args.ir_dump,
         debug=args.debug,
@@ -383,7 +395,7 @@ def cmd_flash(args) -> None:
         device=args.target or args.device,
         baud=args.baud,
         scheduler_slots=args.scheduler_slots,
-        direct_codegen=args.direct_codegen,
+        direct_codegen=not getattr(args, 'ir_pipeline', False),
         no_optimize=args.no_optimize,
         ir_dump=args.ir_dump,
         debug=args.debug,
@@ -539,7 +551,7 @@ def cmd_debug(args) -> None:
 
     # Write generated C with debug symbols
     base = os.path.splitext(os.path.basename(args.source))[0]
-    output_path = base + '.c'
+    output_path = base + '.cpp'
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(c_code)
     print(f'Debug build: {args.source} -> {output_path} (target: {device_name})')
@@ -757,8 +769,8 @@ def _build_legacy_parser() -> argparse.ArgumentParser:
         description=f'Iotift Compiler v{__version__} — .iot → ESP32 C++',
     )
     ap.add_argument('source', help='input .iot source file')
-    ap.add_argument('-o', '--output', default='generated.c',
-                    help='output .c file (default: generated.c)')
+    ap.add_argument('-o', '--output', default='generated.cpp',
+                    help='output C++ file (default: generated.cpp)')
     ap.add_argument('--ast', action='store_true',
                     help='dump AST to stdout and exit')
     ap.add_argument('--device', default='esp32',
@@ -773,8 +785,10 @@ def _build_legacy_parser() -> argparse.ArgumentParser:
                     help='generate PlatformIO project, build, and upload')
     ap.add_argument('--port', default=None,
                     help='serial port for flashing (auto-detected if omitted)')
+    ap.add_argument('--ir-pipeline', action='store_true',
+                    help='use the experimental IR pipeline instead of the default direct codegen')
     ap.add_argument('--direct-codegen', action='store_true',
-                    help='use direct AST→C codegen (skip IR pipeline)')
+                    help='(default; accepted for compatibility)')
     ap.add_argument('--ir-dump', action='store_true',
                     help='dump IR to stdout (implies --no-optimize)')
     ap.add_argument('--no-optimize', action='store_true',
@@ -832,7 +846,7 @@ def _handle_legacy(args) -> None:
             device=args.target or args.device,
             baud=args.baud,
             scheduler_slots=args.scheduler_slots,
-            direct_codegen=args.direct_codegen,
+            direct_codegen=not getattr(args, 'ir_pipeline', False),
             no_optimize=args.no_optimize,
             ir_dump=args.ir_dump,
             debug=args.debug,
@@ -871,7 +885,7 @@ def _handle_legacy(args) -> None:
         device=args.target or args.device,
         baud=args.baud,
         scheduler_slots=args.scheduler_slots,
-        direct_codegen=args.direct_codegen,
+        direct_codegen=not getattr(args, 'ir_pipeline', False),
         no_optimize=args.no_optimize,
         ir_dump=args.ir_dump,
         debug=args.debug,
@@ -916,15 +930,17 @@ def _build_subcommand_parser() -> argparse.ArgumentParser:
     bld = subs.add_parser('build', help='compile .iot to C')
     bld.add_argument('source', help='input .iot source file')
     bld.add_argument('-o', '--output', default=None,
-                     help='output .c file (default: <source>.c)')
+                     help='output C++ file (default: <source>.cpp)')
     bld.add_argument('--device', default='esp32',
                      help='target device (default: esp32)')
     bld.add_argument('--target', default=None,
                      help='target device alias (same as --device)')
     bld.add_argument('--baud', type=int, default=115200,
                      help='serial baud rate (default: 115200)')
+    bld.add_argument('--ir-pipeline', action='store_true',
+                    help='use the experimental IR pipeline instead of the default direct codegen')
     bld.add_argument('--direct-codegen', action='store_true',
-                     help='use direct AST→C codegen (skip IR pipeline)')
+                     help='(default; accepted for compatibility)')
     bld.add_argument('--ir-dump', action='store_true',
                      help='dump IR to stdout')
     bld.add_argument('--no-optimize', action='store_true',
@@ -949,8 +965,10 @@ def _build_subcommand_parser() -> argparse.ArgumentParser:
                      help='serial baud rate (default: 115200)')
     fls.add_argument('--port', default=None,
                      help='serial port (auto-detected if omitted)')
+    fls.add_argument('--ir-pipeline', action='store_true',
+                    help='use the experimental IR pipeline instead of the default direct codegen')
     fls.add_argument('--direct-codegen', action='store_true',
-                     help='use direct AST→C codegen (skip IR pipeline)')
+                     help='(default; accepted for compatibility)')
     fls.add_argument('--no-optimize', action='store_true',
                      help='skip IR optimization passes')
     fls.add_argument('--Werror', action='store_true',
@@ -1057,7 +1075,7 @@ def main() -> None:
             # Set default output for build command
             if args.subcommand == 'build' and not getattr(args, 'output', None):
                 base = os.path.splitext(os.path.basename(args.source))[0]
-                args.output = base + '.c'
+                args.output = base + '.cpp'
             handler(args)
         else:
             ap.print_help()

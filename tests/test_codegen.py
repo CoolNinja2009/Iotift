@@ -145,12 +145,23 @@ enum Mode { WarmWhite, Rainbow = 5, Breathing }
     assert 'Mode' in c
 
 
-def test_no_string_concat():
-    """String + should raise CodeGenError."""
+def test_string_concat_in_print():
+    """`print("a" + x)` prints the parts in order (README syntax)."""
+    c = compile_iot("""
+@device esp32
+int n = 3;
+println("n=" + n + "!");
+""")
+    assert 'Serial.print("n="); Serial.print(n); Serial.println("!");' in c
+
+
+def test_string_concat_outside_print_is_an_error():
+    """There are no heap strings, so + on strings elsewhere must fail loudly."""
     with pytest.raises(CodeGenError):
         compile_iot("""
 @device esp32
-print("hello" + "world");
+int n = 3;
+str s = "n=" + n;
 """)
 
 

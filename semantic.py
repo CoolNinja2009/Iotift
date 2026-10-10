@@ -1345,7 +1345,9 @@ class SemanticAnalyzer:
             )
 
     def _p3_print(self, node: PrintStmt) -> None:
-        self._p3_compute_expr(node.value)
+        # print("a" + x + "b") prints the parts one after another, so `+`
+        # with a string operand is allowed at the top of a print argument.
+        self._p3_print_part(node.value)
         # ISR safety: print/println are forbidden in ISR context
         if self.symbols.in_isr:
             self.symbols.error(
@@ -1353,6 +1355,17 @@ class SemanticAnalyzer:
                 "cannot call 'print()' / 'println()' inside an ISR function — "
                 "ISR functions must be non-blocking",
             )
+
+    def _p3_print_part(self, expr) -> Optional[Type]:
+        if isinstance(expr, BinOp) and expr.op == '+':
+            lt = self._p3_print_part(expr.left)
+            rt = self._p3_print_part(expr.right)
+            if (lt is not None and lt.kind == TypeKind.STR) or (rt is not None and rt.kind == TypeKind.STR):
+                self._set_type(expr, STR)
+                return STR
+            # Purely numeric `+`: type-check it normally.
+            return self._p3_compute_expr(expr)
+        return self._p3_compute_expr(expr)
 
     def _p3_pwm_setup(self, node: PwmSetup) -> None:
         freq_type = self._p3_compute_expr(node.freq)

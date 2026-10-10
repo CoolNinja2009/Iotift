@@ -8,7 +8,7 @@
 // ── Volatile and const variables ────────────────────────────────────
 volatile int shared_flag = 0;
 const int MAX_RETRIES = 3;
-const float PI = 3.14159;
+const float PI_APPROX = 3.14159;  // `PI` itself is a macro in Arduino.h
 
 // ── Pins with all direction types ───────────────────────────────────
 pin DOUT = output 13;
